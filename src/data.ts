@@ -3,6 +3,7 @@
 
 export type Page =
   | "overview"
+  | "collaboration"
   | "monitor"
   | "topics"
   | "alerts"
@@ -63,7 +64,8 @@ export interface Report {
 
 export const snapshotTime = "2026-11-03 14:30";
 export const pageNames: Record<Page, string> = {
-  overview: "态势总览",
+  overview: "研判总览",
+  collaboration: "协同专题",
   monitor: "舆情监测",
   topics: "话题洞察",
   alerts: "风险预警",

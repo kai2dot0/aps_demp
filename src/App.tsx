@@ -60,6 +60,19 @@ import {
   type Report,
 } from "./data";
 import ControlCenter from "./ControlCenter";
+import CollaborationWorkspace, {
+  CollaborationSummary,
+} from "./CollaborationWorkspace";
+import { useWorkspaceState } from "./workspaceStore";
+import {
+  approveReport,
+  collaborationReportId,
+  controlledDocument,
+  createMobileState,
+  rebuildReport,
+  reportDocuments,
+  type MobileReport,
+} from "./mobileState";
 import { signatureFeatures } from "./capabilities";
 import {
   Badge,
@@ -96,6 +109,7 @@ type ReviewNote = { id: string; text: string; result: string; time: string };
 const storageKey = "guanlan-console-v1";
 const nav = [
   { id: "overview", icon: LayoutDashboard },
+  { id: "collaboration", icon: Layers3 },
   { id: "monitor", icon: Radio },
   { id: "topics", icon: TrendingUp },
   { id: "alerts", icon: ShieldAlert },
@@ -171,9 +185,25 @@ function currentPage(): Page {
 export default function App() {
   const [saved] = useState(readState);
   const [page, setPage] = useState<Page>(currentPage);
-  const [risks, setRisks] = useState<Risk[]>(saved.risks);
-  const [reports, setReports] = useState<Report[]>(saved.reports);
-  const [notes, setNotes] = useState<ReviewNote[]>(saved.notes || []);
+  const [workspace, setWorkspace, storageFailed] = useWorkspaceState();
+  const risks = initialRisks.map((r) => ({
+    ...r,
+    status: workspace.statuses[r.id],
+  }));
+  const reports = workspace.reports;
+  const notes: ReviewNote[] = workspace.reviews.map((r) => ({
+    id: r.riskId,
+    text: r.note,
+    result:
+      r.result === "通过复核"
+        ? "已确认"
+        : r.result === "排除线索"
+          ? "已归档"
+          : "复核中",
+    time: r.time,
+  }));
+  // Keep report edits in the same store that drives mobile approvals and source changes.
+
   const [paused, setPaused] = useState<string[]>(saved.paused || []);
   const [dialog, setDialog] = useState<Dialog>(null);
   const [toast, setToast] = useState("");
@@ -197,14 +227,11 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(
-        storageKey,
-        JSON.stringify({ risks, reports, notes, paused }),
-      );
+      localStorage.setItem(storageKey, JSON.stringify({ ...saved, paused }));
     } catch {
       /* The session remains usable without persistence. */
     }
-  }, [risks, reports, notes, paused]);
+  }, [paused, saved]);
   useEffect(() => {
     const handler = () => {
       setPage(currentPage());
@@ -240,13 +267,30 @@ export default function App() {
     setSelected([]);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
-  const open = (kind: NonNullable<Dialog>["kind"], id = "") =>
+  // Collaboration reports open in their governed workspace, preserving the handoff order.
+  const open = (kind: NonNullable<Dialog>["kind"], id = "") => {
+    if (
+      (kind === "report" && id === collaborationReportId) ||
+      (kind === "risk" &&
+        id === "ALT-1103-001" &&
+        workspace.collaboration.phase !== "identified")
+    ) {
+      go("collaboration");
+      return;
+    }
     setDialog({ kind, id } as Dialog);
+  };
   const countPending = risks.filter((r) => r.status === "待确认").length;
   const reviewRisks = risks.filter((r) => r.status === "复核中");
-  const filteredArticles = articles.filter(
+  const availableArticles = articles.filter(
+    (a) => !workspace.withdrawn || a.id !== controlledDocument,
+  );
+  const filteredArticles = availableArticles.filter(
     (a) =>
-      (!query || `${a.title}${a.content}${a.author}${a.id}`.includes(query)) &&
+      (!query ||
+        `${workspace.withdrawn && a.id === controlledDocument ? "来源已撤回 · 内容不可用" : a.title}${a.content}${a.author}${a.id}`.includes(
+          query,
+        )) &&
       (category === "全部领域" || a.category === category) &&
       (filter === "全部" || a.sentiment === filter) &&
       (source === "全部来源" || a.source === source),
@@ -292,16 +336,34 @@ export default function App() {
     status: Risk["status"],
     text = "人工确认风险线索，等待后续跟踪。",
   ) => {
-    setRisks((list) => list.map((r) => (r.id === id ? { ...r, status } : r)));
-    setNotes((list) => [
-      {
-        id,
-        text,
-        result: status,
-        time: new Date().toLocaleString("zh-CN", { hour12: false }),
-      },
-      ...list,
-    ]);
+    setWorkspace((previous) => ({
+      ...previous,
+      statuses: { ...previous.statuses, [id]: status },
+      reviews: [
+        {
+          riskId: id,
+          note: text,
+          result:
+            status === "已确认"
+              ? "通过复核"
+              : status === "已归档"
+                ? "排除线索"
+                : "补充材料",
+          time: new Date().toLocaleString("zh-CN", { hour12: false }),
+        },
+        ...previous.reviews,
+      ],
+      activity: [
+        {
+          id: crypto.randomUUID(),
+          title: `网页端 · ${status}`,
+          detail: text,
+          route: `risk/${id}`,
+          time: new Date().toLocaleString("zh-CN", { hour12: false }),
+        },
+        ...previous.activity,
+      ],
+    }));
     notify(`已记录：${status}`);
   };
   const categorySelect = (
@@ -342,23 +404,23 @@ export default function App() {
   );
 
   // Report text uses only the fixed observation snapshot and its traceable sample records.
-  function reportText(report: Report) {
-    const items = articles.filter(
-      (a) => report.scope === "全部领域" || a.category === report.scope,
+  function reportText(report: MobileReport) {
+    const items = availableArticles.filter((a) =>
+      report.evidenceIds.includes(a.id),
     );
     return `# ${report.title}\n\n报告编号：${report.id}\n观察快照：${snapshotTime}\n生成日期：${report.date}\n监管领域：${report.scope}\n覆盖口径：${report.coverage}\n状态：${report.status}\n\n## 观察摘要\n本报告基于所选领域的 ${items.length} 条可查阅样本记录。采集源覆盖范围有限，结论仅适用于本次观察。\n\n## 重点关注\n${topics
       .filter((t) => report.scope === "全部领域" || t.category === report.scope)
       .map((t) => `- ${t.title}：${t.summary}`)
       .join(
         "\n",
-      )}\n\n## 研判建议\n核实高关注事项的原始记录与主体信息；对尚无交叉证据的内容保留不确定性；持续跟踪后续变化。\n\n## 证据索引\n${items.map((a) => `- [${a.evidence}] ${a.title}（${a.source}，${a.time}）`).join("\n")}\n\n数据说明：内置样本；主体及人员为虚构信息。报告不能作为已核实的事实结论。`;
+      )}\n\n## 研判建议\n核实高关注事项的原始记录与主体信息；对尚无交叉证据的内容保留不确定性；持续跟踪后续变化。\n\n## 证据索引\n${items.map((a) => `- [${a.evidence}] ${workspace.withdrawn && a.id === controlledDocument ? "来源已撤回 · 内容不可用" : a.title}（${a.source}，${a.time}）`).join("\n")}\n\n数据说明：内置样本；主体及人员为虚构信息。报告不能作为已核实的事实结论。`;
   }
   async function createReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     setBusy(true);
     await new Promise((resolve) => setTimeout(resolve, 900));
-    const report: Report = {
+    const report: MobileReport = {
       id: `RPT-${Date.now()}`,
       title: String(form.get("title")).trim() || "市场监管舆情研判报告",
       type: String(form.get("type")),
@@ -366,8 +428,27 @@ export default function App() {
       scope: String(form.get("scope")),
       status: "待审核",
       coverage: "相对本次观察",
+      revision: 1,
+      stale: false,
+      evidenceIds: reportDocuments(
+        String(form.get("scope")),
+        workspace.withdrawn,
+      ).map((a) => a.id),
     };
-    setReports((list) => [report, ...list]);
+    setWorkspace((previous) => ({
+      ...previous,
+      reports: [report, ...previous.reports],
+      activity: [
+        {
+          id: crypto.randomUUID(),
+          title: "网页端 · 新报告待审核",
+          detail: report.title,
+          route: `report/${report.id}`,
+          time: new Date().toLocaleString("zh-CN", { hour12: false }),
+        },
+        ...previous.activity,
+      ],
+    }));
     setBusy(false);
     open("report", report.id);
     notify("报告已生成，等待人工审核");
@@ -377,8 +458,8 @@ export default function App() {
     return (
       <>
         <PageHeader
-          title="舆情态势总览"
-          description="感知舆情变化，洞察潜在风险，让每一次研判有据可循。"
+          title="研判与管理中枢"
+          description="汇聚全量信息，深挖证据与规则，形成可交付、可追溯的专业判断。"
         >
           <span className="date-pill">
             <CalendarDays size={15} />
@@ -399,20 +480,34 @@ export default function App() {
           </button>
           {reportButton}
         </PageHeader>
-        <div className="insight-banner">
-          <span className="insight-icon">
-            <Sparkles size={19} />
-          </span>
+        <section className="desktop-mission">
           <div>
-            <strong>今日关注</strong>
-            <span>
-              食品安全相关讨论热度上升，校园周边餐饮卫生值得重点关注。
-            </span>
+            <span>PROFESSIONAL INTELLIGENCE CENTER</span>
+            <h2>把信息看全，把判断做深。</h2>
+            <p>从证据比对、专题研判到规则治理，为移动端提供可靠的决策依据。</p>
           </div>
-          <button onClick={() => open("topic", "TOP-001")}>
-            查看研判 <ArrowRight size={15} />
-          </button>
-        </div>
+          <div className="desktop-mission-actions">
+            <button onClick={() => go("collaboration")}>
+              <Layers3 size={20} />
+              <strong>专题研判与协同</strong>
+              <small>证据 · 复核 · 报告</small>
+            </button>
+            <button onClick={() => go("evidence")}>
+              <Fingerprint size={20} />
+              <strong>证据审查</strong>
+              <small>来源 · 引用 · 版本</small>
+            </button>
+            <button onClick={() => go("platform")}>
+              <Settings2 size={20} />
+              <strong>治理与运行</strong>
+              <small>规则 · 模型 · 质量</small>
+            </button>
+          </div>
+        </section>
+        <CollaborationSummary
+          state={workspace}
+          onOpen={() => go("collaboration")}
+        />
         <div className="stats-grid">
           <StatCard
             title="今日采集舆情"
@@ -650,7 +745,7 @@ export default function App() {
         </PageHeader>
         <Panel
           title="观察记录"
-          subtitle="当前可查阅 12 条代表性样本；完整汇总见态势总览"
+          subtitle={`当前可查阅 ${availableArticles.length} 条代表性样本；已撤回记录不再展示`}
           action={
             <Badge tone="blue" dot>
               快照已冻结
@@ -718,7 +813,7 @@ export default function App() {
                     <tr key={a.id}>
                       <td>
                         <input
-                          aria-label={`选择 ${a.title}`}
+                          aria-label={`选择 ${workspace.withdrawn && a.id === controlledDocument ? "来源已撤回 · 内容不可用" : a.title}`}
                           type="checkbox"
                           checked={selected.includes(a.id)}
                           onChange={(e) =>
@@ -735,7 +830,9 @@ export default function App() {
                           className="table-title"
                           onClick={() => open("article", a.id)}
                         >
-                          {a.title}
+                          {workspace.withdrawn && a.id === controlledDocument
+                            ? "来源已撤回 · 内容不可用"
+                            : a.title}
                         </button>
                         <small>
                           {a.id} <span>·</span> {a.topic}
@@ -986,7 +1083,8 @@ export default function App() {
     const list = reports.filter(
       (r) =>
         (!query || r.title.includes(query)) &&
-        (filter === "全部" || r.status === filter),
+        (filter === "全部" ||
+          (filter === "引用待更新" ? r.stale : r.status === filter)),
     );
     return (
       <>
@@ -1034,7 +1132,7 @@ export default function App() {
             onChange={setQuery}
             placeholder="搜索报告名称"
           />
-          {segments(["全部", "待审核", "已发布", "草稿"])}
+          {segments(["全部", "待审核", "已发布", "草稿", "引用待更新"])}
           <span className="muted">共 {list.length} 份报告</span>
         </div>
         <div className="report-grid">
@@ -1067,7 +1165,9 @@ export default function App() {
               <div className="report-card-body">
                 <div className="card-top">
                   <span className="muted">{r.type}</span>
-                  <Badge tone={toneFor(r.status)}>{r.status}</Badge>
+                  <Badge tone={r.stale ? "orange" : toneFor(r.status)}>
+                    {r.stale ? "引用待更新" : r.status}
+                  </Badge>
                 </div>
                 <button
                   className="table-title"
@@ -1102,8 +1202,14 @@ export default function App() {
   function renderEvidence() {
     const list = articles.filter(
       (a) =>
-        (!query || `${a.evidence}${a.title}`.includes(query)) &&
-        filter !== "已撤回",
+        (!query ||
+          `${a.evidence}${workspace.withdrawn && a.id === controlledDocument ? "来源已撤回 · 内容不可用" : a.title}`.includes(
+            query,
+          )) &&
+        (filter === "全部" ||
+          (filter === "已撤回"
+            ? workspace.withdrawn && a.id === controlledDocument
+            : !workspace.withdrawn || a.id !== controlledDocument)),
     );
     const showWithdrawn =
       filter !== "有效" &&
@@ -1152,17 +1258,32 @@ export default function App() {
                         className="table-title"
                         onClick={() => open("evidence", a.id)}
                       >
-                        {a.title}
+                        {workspace.withdrawn && a.id === controlledDocument
+                          ? "来源已撤回 · 原文不可读"
+                          : a.title}
                       </button>
                       <small>{a.evidence}</small>
                     </td>
                     <td>{a.source}</td>
                     <td>
-                      <code>v1 · normalized</code>
+                      <code>
+                        {workspace.withdrawn && a.id === controlledDocument
+                          ? "v2 · source_withdrawn"
+                          : "v1 · normalized"}
+                      </code>
                     </td>
                     <td>
-                      <Badge tone="green" dot>
-                        有效
+                      <Badge
+                        tone={
+                          workspace.withdrawn && a.id === controlledDocument
+                            ? "orange"
+                            : "green"
+                        }
+                        dot
+                      >
+                        {workspace.withdrawn && a.id === controlledDocument
+                          ? "已撤回"
+                          : "有效"}
                       </Badge>
                     </td>
                     <td>
@@ -1772,7 +1893,7 @@ export default function App() {
         </Overlay>
       );
     if (dialog.kind === "article" || dialog.kind === "evidence") {
-      const a = articles.find((item) => item.id === dialog.id);
+      const a = availableArticles.find((item) => item.id === dialog.id);
       return (
         <Overlay
           title={dialog.kind === "evidence" ? "证据追溯" : "舆情详情"}
@@ -1793,7 +1914,11 @@ export default function App() {
               <dl className="key-values">
                 <div>
                   <dt>证据编号</dt>
-                  <dd>EVD-20261031-009</dd>
+                  <dd>
+                    {dialog.id === controlledDocument
+                      ? "EVD-20261103-001"
+                      : "EVD-20261031-009"}
+                  </dd>
                 </div>
                 <div>
                   <dt>状态版本</dt>
@@ -1885,7 +2010,11 @@ export default function App() {
                   <FileText size={17} />
                 </span>
                 <div>
-                  <strong>{a.title}</strong>
+                  <strong>
+                    {workspace.withdrawn && a.id === controlledDocument
+                      ? "来源已撤回 · 内容不可用"
+                      : a.title}
+                  </strong>
                   <small>
                     {a.source} · {a.time}
                   </small>
@@ -1966,7 +2095,11 @@ export default function App() {
                 >
                   <Fingerprint size={18} />
                   <div>
-                    <strong>{a.title}</strong>
+                    <strong>
+                      {workspace.withdrawn && a.id === controlledDocument
+                        ? "来源已撤回 · 内容不可用"
+                        : a.title}
+                    </strong>
                     <small>{a.evidence}</small>
                   </div>
                   <ChevronRight size={16} />
@@ -2064,16 +2197,20 @@ export default function App() {
     }
     if (dialog.kind === "report") {
       const r = reports.find((r) => r.id === dialog.id)!;
-      const items = articles.filter(
-        (a) => r.scope === "全部领域" || a.category === r.scope,
+      const items = availableArticles.filter((a) =>
+        r.evidenceIds.includes(a.id),
       );
       return (
         <Overlay title="研判报告" subtitle={r.id} onClose={closeDialog} wide>
           <div className="report-toolbar">
-            <Badge tone={toneFor(r.status)}>{r.status}</Badge>
+            <Badge tone={r.stale ? "orange" : toneFor(r.status)}>
+              {r.stale ? "引用待更新" : r.status}
+            </Badge>
             <button
               className="button small"
+              disabled={r.stale || r.status !== "已发布"}
               onClick={() => {
+                if (r.stale || r.status !== "已发布") return;
                 downloadFile(`${r.title}.md`, reportText(r));
                 notify("报告已导出");
               }}
@@ -2082,87 +2219,117 @@ export default function App() {
               导出 Markdown
             </button>
           </div>
-          <article className="report-document">
-            <div className="document-brand">
-              <Waves size={22} />
-              观澜<span>市场监管舆情研判</span>
-            </div>
-            <h1>{r.title}</h1>
-            <p className="document-subtitle">
-              {r.type} / {r.date} / {r.scope}
-            </p>
-            <div className="document-info">
-              <span>数据快照：{snapshotTime}</span>
-              <span>覆盖口径：{r.coverage}</span>
-            </div>
-            <h3>
-              <span>01</span>观察摘要
-            </h3>
-            <p>
-              本次研判整理所选领域的 <b>{items.length} 条</b>
-              可查阅样本记录。讨论主要围绕
-              {r.scope === "全部领域"
-                ? "食品安全、消费权益、价格监管等领域"
-                : r.scope}
-              展开。以下内容基于固定观察快照，保留事实核验边界。
-            </p>
-            <h3>
-              <span>02</span>重点话题与风险信号
-            </h3>
-            {topics
-              .filter((t) => r.scope === "全部领域" || t.category === r.scope)
-              .slice(0, 4)
-              .map((t) => (
-                <div className="report-topic" key={t.id}>
-                  <strong>{t.title}</strong>
-                  <Badge tone={toneFor(t.risk)}>{t.risk}</Badge>
-                  <p>{t.summary}</p>
-                </div>
-              ))}
-            <h3>
-              <span>03</span>研判建议
-            </h3>
-            <ol>
-              <li>核对高关注事项的原始记录和主体信息，补充交叉证据。</li>
-              <li>区分公众表达与已核实事实，对不确定结论保留说明。</li>
-              <li>持续跟踪后续讨论与处置反馈，在新快照中更新判断。</li>
-            </ol>
-            <h3>
-              <span>04</span>证据索引
-            </h3>
-            {items.slice(0, 6).map((a, i) => (
-              <button
-                className="report-citation"
-                key={a.id}
-                onClick={() => open("evidence", a.id)}
-              >
-                <span>[{i + 1}]</span>
-                {a.title}
-                <ExternalLink size={12} />
-              </button>
-            ))}
-            {items.length > 6 && (
-              <p className="record-note">
-                另有 {items.length - 6} 条记录，完整索引包含在导出文件中。
-              </p>
-            )}
-            <div className="document-footnote">
-              <Shield size={17} />
+          {r.stale ? (
+            <div className="notice">
+              <ShieldAlert size={20} />
               <p>
-                数据说明：内置样本；主体及人员为虚构信息。公开来源覆盖范围有限，结论仅适用于本次观察。相关线索需进一步核实。
+                此版本引用了已撤回来源，暂停展示与导出。请更新依据后重新审核。
               </p>
             </div>
-          </article>
-          {r.status !== "已发布" && (
+          ) : (
+            <article className="report-document">
+              <div className="document-brand">
+                <Waves size={22} />
+                观澜<span>市场监管舆情研判</span>
+              </div>
+              <h1>{r.title}</h1>
+              <p className="document-subtitle">
+                {r.type} / {r.date} / {r.scope}
+              </p>
+              <div className="document-info">
+                <span>数据快照：{snapshotTime}</span>
+                <span>覆盖口径：{r.coverage}</span>
+              </div>
+              <h3>
+                <span>01</span>观察摘要
+              </h3>
+              <p>
+                本次研判整理所选领域的 <b>{items.length} 条</b>
+                可查阅样本记录。讨论主要围绕
+                {r.scope === "全部领域"
+                  ? "食品安全、消费权益、价格监管等领域"
+                  : r.scope}
+                展开。以下内容基于固定观察快照，保留事实核验边界。
+              </p>
+              <h3>
+                <span>02</span>重点话题与风险信号
+              </h3>
+              {topics
+                .filter((t) => r.scope === "全部领域" || t.category === r.scope)
+                .slice(0, 4)
+                .map((t) => (
+                  <div className="report-topic" key={t.id}>
+                    <strong>{t.title}</strong>
+                    <Badge tone={toneFor(t.risk)}>{t.risk}</Badge>
+                    <p>{t.summary}</p>
+                  </div>
+                ))}
+              <h3>
+                <span>03</span>研判建议
+              </h3>
+              <ol>
+                <li>核对高关注事项的原始记录和主体信息，补充交叉证据。</li>
+                <li>区分公众表达与已核实事实，对不确定结论保留说明。</li>
+                <li>持续跟踪后续讨论与处置反馈，在新快照中更新判断。</li>
+              </ol>
+              <h3>
+                <span>04</span>证据索引
+              </h3>
+              {items.slice(0, 6).map((a, i) => (
+                <button
+                  className="report-citation"
+                  key={a.id}
+                  onClick={() => open("evidence", a.id)}
+                >
+                  <span>[{i + 1}]</span>
+                  {workspace.withdrawn && a.id === controlledDocument
+                    ? "来源已撤回 · 内容不可用"
+                    : a.title}
+                  <ExternalLink size={12} />
+                </button>
+              ))}
+              {items.length > 6 && (
+                <p className="record-note">
+                  另有 {items.length - 6} 条记录，完整索引包含在导出文件中。
+                </p>
+              )}
+              <div className="document-footnote">
+                <Shield size={17} />
+                <p>
+                  数据说明：内置样本；主体及人员为虚构信息。公开来源覆盖范围有限，结论仅适用于本次观察。相关线索需进一步核实。
+                </p>
+              </div>
+            </article>
+          )}
+          {r.stale && (
+            <button
+              className="button primary"
+              onClick={() =>
+                setWorkspace((previous) => rebuildReport(previous, r.id))
+              }
+            >
+              <RefreshCw size={16} />
+              更新引用并重新生成
+            </button>
+          )}
+          {!r.stale && r.status === "草稿" && (
+            <button
+              className="button primary"
+              onClick={() => {
+                setWorkspace((previous) => rebuildReport(previous, r.id));
+                notify("报告已生成，等待审核");
+              }}
+            >
+              <FileText size={16} />
+              生成并提交审核
+            </button>
+          )}
+          {!r.stale && r.status === "待审核" && (
             <form
               className="form approval-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                setReports((list) =>
-                  list.map((item) =>
-                    item.id === r.id ? { ...item, status: "已发布" } : item,
-                  ),
-                );
+                setWorkspace((previous) => approveReport(previous, r.id, true));
                 notify("审核已通过，报告状态已更新");
               }}
             >
@@ -2174,7 +2341,9 @@ export default function App() {
                 <FileCheck2 size={16} />
                 审核通过并发布
               </button>
-              <small>发布状态仅记录在当前浏览器，不向外部发送报告。</small>
+              <small>
+                发布状态同步到本浏览器的移动工作台，不向外部发送报告。
+              </small>
             </form>
           )}
         </Overlay>
@@ -2349,9 +2518,38 @@ export default function App() {
       return (
         <Overlay
           title="消息中心"
-          subtitle="当前观察快照的待办提醒"
+          subtitle="两端共享的任务动态与待办提醒"
           onClose={closeDialog}
         >
+          <CollaborationSummary
+            state={workspace}
+            onOpen={() => go("collaboration")}
+          />
+          {workspace.activity
+            .filter((a) => !a.id.startsWith("seed-"))
+            .slice(0, 4)
+            .map((a) => (
+              <button
+                className="notification-item"
+                key={a.id}
+                onClick={() => {
+                  const [kind, id] = a.route.split("/");
+                  if (kind === "collaboration") go("collaboration");
+                  else if (kind === "report" || kind === "risk") open(kind, id);
+                  else go("evidence");
+                }}
+              >
+                <span className="large-icon blue">
+                  <Smartphone size={20} />
+                </span>
+                <div>
+                  <strong>{a.title}</strong>
+                  <p>{a.detail}</p>
+                  <small>{a.time}</small>
+                </div>
+                <ChevronRight size={16} />
+              </button>
+            ))}
           {[
             {
               title: `${countPending} 条风险线索待确认`,
@@ -2418,9 +2616,7 @@ export default function App() {
           <button
             className="button"
             onClick={() => {
-              setRisks(initialRisks);
-              setReports(initialReports);
-              setNotes([]);
+              setWorkspace(createMobileState());
               setPaused([]);
               notify("已恢复初始样本状态");
               closeDialog();
@@ -2475,6 +2671,9 @@ export default function App() {
 
   const views = {
     overview: renderOverview,
+    collaboration: () => (
+      <CollaborationWorkspace onEvidence={(id) => open("evidence", id)} />
+    ),
     monitor: renderMonitor,
     topics: renderTopics,
     alerts: renderAlerts,
@@ -2506,7 +2705,7 @@ export default function App() {
           </span>
           <span>
             <strong>观澜</strong>
-            <small>市场监管舆情平台</small>
+            <small>专业研判与管理中枢</small>
           </span>
           <span className="brand-version">PRO</span>
         </button>
@@ -2521,7 +2720,7 @@ export default function App() {
           <p className="nav-group">工作空间</p>
           {nav.map((item, i) => (
             <div key={item.id}>
-              {i === 5 && <p className="nav-group second">治理与运行</p>}
+              {i === 6 && <p className="nav-group second">治理与运行</p>}
               <button
                 className={`nav-item ${page === item.id ? "active" : ""}`}
                 onClick={() => {
@@ -2577,7 +2776,7 @@ export default function App() {
             >
               <Menu size={21} />
             </button>
-            <span>工作空间</span>
+            <span>研判中枢</span>
             <ChevronRight size={14} />
             <strong>{pageNames[page]}</strong>
           </div>
@@ -2588,7 +2787,7 @@ export default function App() {
               style={{ textDecoration: "none" }}
             >
               <Smartphone size={16} />
-              移动工作台
+              移动决策助手
             </a>
             <form
               className="global-search"
@@ -2631,6 +2830,9 @@ export default function App() {
           </div>
         </header>
         <main className="main-content" key={page}>
+          {storageFailed && (
+            <div className="notice">浏览器存储不可用，跨页面同步暂不可用。</div>
+          )}
           {views[page]()}
         </main>
         <footer className="page-footer">

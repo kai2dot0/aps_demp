@@ -5,6 +5,33 @@ import type { Report, RiskStatus } from "./data.ts";
 
 export const mobileStorageKey = "guanlan-mobile-v1";
 export const controlledDocument = articles[0].id;
+export const collaborationReportId = "RPT-COLLAB-001";
+export const collaborationPhases = [
+  "identified",
+  "assigned",
+  "reviewed",
+  "drafted",
+  "published",
+  "changed",
+  "rebuilt",
+  "completed",
+] as const;
+export type CollaborationPhase = (typeof collaborationPhases)[number];
+export type CollaborationActor = "网页端" | "App 端";
+export type CollaborationAction =
+  "assign" | "review" | "return" | "draft" | "approve" | "withdraw" | "rebuild";
+export interface CollaborationState {
+  phase: CollaborationPhase;
+  analysis: string;
+  feedback: string;
+  events: {
+    id: string;
+    actor: CollaborationActor;
+    title: string;
+    detail: string;
+    time: string;
+  }[];
+}
 export type ReviewResult = "通过复核" | "补充材料" | "排除线索";
 export type MobileReport = Report & {
   revision: number;
@@ -34,6 +61,7 @@ export interface MobileState {
   withdrawn: boolean;
   activity: ActivityEntry[];
   readActivity: string[];
+  collaboration: CollaborationState;
 }
 
 // Match each report to the same document scope used by the desktop workspace.
@@ -45,7 +73,7 @@ export function reportDocuments(scope: string, withdrawn = false) {
   );
 }
 
-// Start an isolated, repeatable mobile presentation without changing desktop state.
+// Start the shared sample workspace used by both desktop and mobile experiences.
 export function createMobileState(): MobileState {
   return {
     version: 1,
@@ -77,6 +105,12 @@ export function createMobileState(): MobileState {
       },
     ],
     readActivity: [],
+    collaboration: {
+      phase: "identified",
+      analysis: "",
+      feedback: "",
+      events: [],
+    },
   };
 }
 
@@ -144,6 +178,21 @@ export function parseMobileState(raw: string | null): MobileState {
       !s.readActivity.every((id) => typeof id === "string")
     )
       return createMobileState();
+    if (!s.collaboration) s.collaboration = createMobileState().collaboration;
+    const c = s.collaboration;
+    if (
+      !collaborationPhases.includes(c.phase) ||
+      typeof c.analysis !== "string" ||
+      typeof c.feedback !== "string" ||
+      !Array.isArray(c.events) ||
+      !c.events.every(
+        (e) =>
+          [e.id, e.title, e.detail, e.time].every(
+            (x) => typeof x === "string",
+          ) && ["网页端", "App 端"].includes(e.actor),
+      )
+    )
+      return createMobileState();
     return s;
   } catch {
     return createMobileState();
@@ -156,10 +205,208 @@ export function withdrawSource(state: MobileState): MobileState {
   return {
     ...state,
     withdrawn: true,
+    collaboration:
+      state.collaboration.phase === "published"
+        ? { ...state.collaboration, phase: "changed" }
+        : state.collaboration,
     reports: state.reports.map((r) => ({
       ...r,
       stale: r.stale || r.evidenceIds.includes(controlledDocument),
     })),
+  };
+}
+
+// Resolve the next task from the authoritative workflow phase for both clients.
+export function collaborationTask(state: MobileState) {
+  const tasks: Record<
+    CollaborationPhase,
+    { title: string; owner: CollaborationActor; action: string }
+  > = {
+    identified: {
+      title: "核对证据并派发移动复核",
+      owner: "网页端",
+      action: "派发移动复核",
+    },
+    assigned: {
+      title: "核验证据，提交复核意见",
+      owner: "App 端",
+      action: "提交复核意见",
+    },
+    reviewed: {
+      title: "形成专题判断，提交报告审核",
+      owner: "网页端",
+      action: "生成报告并送审",
+    },
+    drafted: {
+      title: "审核专题报告 v1",
+      owner: "App 端",
+      action: "审核通过并发布",
+    },
+    published: {
+      title: "持续跟踪来源与引用变化",
+      owner: "网页端",
+      action: "演练来源撤回",
+    },
+    changed: {
+      title: "来源已撤回，更新受影响报告",
+      owner: "网页端",
+      action: "更新依据并重新送审",
+    },
+    rebuilt: {
+      title: "审核更新后的专题报告",
+      owner: "App 端",
+      action: "审核新版本并发布",
+    },
+    completed: {
+      title: "新版本已发布，协同闭环完成",
+      owner: "App 端",
+      action: "查看协同记录",
+    },
+  };
+  return tasks[state.collaboration.phase];
+}
+
+// Advance a single collaboration step, guarding actor, order, evidence health and approval.
+export function advanceCollaboration(
+  state: MobileState,
+  action: CollaborationAction,
+  actor: CollaborationActor,
+  input: { note?: string; checked?: boolean },
+  time: string,
+  eventId: string,
+): MobileState {
+  const phase = state.collaboration.phase;
+  const note = input.note?.trim() || "";
+  let next = state;
+  let nextPhase: CollaborationPhase = phase;
+  let title = "";
+  const web = actor === "网页端";
+  if (
+    action === "assign" &&
+    web &&
+    phase === "identified" &&
+    !state.withdrawn
+  ) {
+    next = {
+      ...state,
+      statuses: { ...state.statuses, "ALT-1103-001": "复核中" },
+    };
+    nextPhase = "assigned";
+    title = "已派发移动复核";
+  } else if (
+    action === "review" &&
+    !web &&
+    phase === "assigned" &&
+    note.length >= 5
+  ) {
+    next = submitReview(state, "ALT-1103-001", "通过复核", note, time);
+    nextPhase = "reviewed";
+    title = "移动复核意见已回传";
+  } else if (
+    action === "return" &&
+    !web &&
+    phase === "assigned" &&
+    note.length >= 5
+  ) {
+    next = {
+      ...state,
+      statuses: { ...state.statuses, "ALT-1103-001": "待确认" },
+    };
+    nextPhase = "identified";
+    title = "复核退回，等待补充材料";
+  } else if (
+    action === "draft" &&
+    web &&
+    phase === "reviewed" &&
+    note.length >= 10 &&
+    !state.withdrawn
+  ) {
+    const report: MobileReport = {
+      id: collaborationReportId,
+      title: "校园餐饮风险协同研判",
+      type: "专题报告",
+      date: "2026-11-03",
+      status: "待审核",
+      scope: "食品安全",
+      coverage: "相对本次观察",
+      revision: 1,
+      evidenceIds: reportDocuments("食品安全").map((a) => a.id),
+      stale: false,
+    };
+    next = {
+      ...state,
+      reports: [
+        report,
+        ...state.reports.filter((r) => r.id !== collaborationReportId),
+      ],
+    };
+    nextPhase = "drafted";
+    title = "专题报告 v1 已送审";
+  } else if (
+    action === "approve" &&
+    !web &&
+    ["drafted", "rebuilt"].includes(phase) &&
+    input.checked
+  ) {
+    const report = state.reports.find((r) => r.id === collaborationReportId);
+    if (!report || report.stale || report.status !== "待审核") return state;
+    next = approveReport(state, collaborationReportId, true);
+    nextPhase = phase === "rebuilt" ? "completed" : "published";
+    title = `专题报告 v${report.revision} 已审核发布`;
+  } else if (
+    action === "withdraw" &&
+    web &&
+    phase === "published" &&
+    !state.withdrawn
+  ) {
+    next = withdrawSource(state);
+    nextPhase = "changed";
+    title = "来源撤回，关联引用已标记";
+  } else if (
+    action === "rebuild" &&
+    web &&
+    phase === "changed" &&
+    note.length >= 10 &&
+    state.withdrawn
+  ) {
+    next = rebuildReport(state, collaborationReportId);
+    nextPhase = "rebuilt";
+    title = "已排除撤回来源，新版本已送审";
+  } else return state;
+  const detail =
+    note ||
+    (action === "withdraw"
+      ? "原文停止展示，已发布报告暂停使用；结论保留 active 并标记 source_withdrawn。"
+      : collaborationTask({
+          ...next,
+          collaboration: { ...next.collaboration, phase: nextPhase },
+        }).title);
+  return {
+    ...next,
+    collaboration: {
+      ...next.collaboration,
+      phase: nextPhase,
+      analysis: ["draft", "rebuild"].includes(action)
+        ? note
+        : next.collaboration.analysis,
+      feedback: ["review", "return"].includes(action)
+        ? note
+        : next.collaboration.feedback,
+      events: [
+        ...next.collaboration.events,
+        { id: eventId, actor, title, detail, time },
+      ],
+    },
+    activity: [
+      {
+        id: eventId,
+        title: `${actor} · ${title}`,
+        detail,
+        route: "collaboration",
+        time,
+      },
+      ...next.activity,
+    ],
   };
 }
 

@@ -63,9 +63,8 @@ import {
 import {
   approveReport,
   controlledDocument,
+  collaborationReportId,
   createMobileState,
-  mobileStorageKey,
-  parseMobileState,
   rebuildReport,
   submitReview,
   withdrawSource,
@@ -73,6 +72,10 @@ import {
   type MobileState,
   type ReviewResult,
 } from "./mobileState";
+import { useWorkspaceState } from "./workspaceStore";
+import CollaborationWorkspace, {
+  CollaborationSummary,
+} from "./CollaborationWorkspace";
 
 const tabs = [
   { id: "overview", label: "总览", icon: Home },
@@ -82,7 +85,8 @@ const tabs = [
   { id: "me", label: "我的", icon: UserRound },
 ] as const;
 const sectionNames: Record<string, string> = {
-  overview: "工作总览",
+  overview: "随身工作台",
+  collaboration: "协同待办",
   alerts: "风险预警",
   topics: "话题洞察",
   reports: "研判报告",
@@ -104,15 +108,6 @@ const sectionNames: Record<string, string> = {
 function readRoute() {
   const [section = "overview", id = ""] = location.hash.slice(1).split("/");
   return { section: section in sectionNames ? section : "overview", id };
-}
-
-// Preserve the mobile session when storage is available; keep it usable otherwise.
-function loadState() {
-  try {
-    return parseMobileState(localStorage.getItem(mobileStorageKey));
-  } catch {
-    return createMobileState();
-  }
 }
 
 // Return a timestamp for local review and activity records.
@@ -149,7 +144,7 @@ function ActionRow({
 
 // Provide a mobile workspace on top of the existing evidence, topics and design components.
 export default function MobileApp() {
-  const [state, setState] = useState<MobileState>(loadState);
+  const [state, setState, storageFailed] = useWorkspaceState();
   const [route, setRoute] = useState(readRoute);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("全部");
@@ -162,7 +157,6 @@ export default function MobileApp() {
   const [result, setResult] = useState<ReviewResult>("通过复核");
   const [note, setNote] = useState("");
   const [formError, setFormError] = useState("");
-  const [storageFailed, setStorageFailed] = useState(false);
   const previousRoutes = useRef<string[]>([]);
   const closeConfirm = useCallback(() => setConfirm(null), []);
   const risks = initialRisks.map((r) => ({
@@ -179,7 +173,9 @@ export default function MobileApp() {
   const available = articles.filter(
     (a) => !state.withdrawn || a.id !== controlledDocument,
   );
-  const activeTab = ["risk", "review", "history"].includes(route.section)
+  const activeTab = ["risk", "review", "history", "collaboration"].includes(
+    route.section,
+  )
     ? "alerts"
     : ["topic", "following"].includes(route.section)
       ? "topics"
@@ -208,13 +204,6 @@ export default function MobileApp() {
     document.title = `${sectionNames[route.section]} · 观澜移动工作台`;
   }, [route.section]);
   useEffect(() => {
-    try {
-      localStorage.setItem(mobileStorageKey, JSON.stringify(state));
-    } catch {
-      setStorageFailed(true);
-    }
-  }, [state]);
-  useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(""), 3200);
     return () => clearTimeout(timer);
@@ -222,6 +211,12 @@ export default function MobileApp() {
 
   // Navigate through real URLs so refresh and browser back preserve each detail view.
   function go(target: string) {
+    if (
+      target === `report/${collaborationReportId}` ||
+      (target === "risk/ALT-1103-001" &&
+        state.collaboration.phase !== "identified")
+    )
+      target = "collaboration";
     previousRoutes.current.push(location.hash.slice(1) || "overview");
     location.hash = target;
   }
@@ -364,19 +359,19 @@ export default function MobileApp() {
         <section className="m-hero">
           <div className="m-hero-top">
             <span>
-              <span className="m-live-dot" /> 今日研判摘要
+              <span className="m-live-dot" /> 随身风险与决策助手
             </span>
             <span>11.03 / 周二</span>
           </div>
           <h1>
-            洞察每一处变化
+            重要风险，随时掌握
             <br />
-            <em>让研判有据可循</em>
+            <em>关键判断，及时回应</em>
           </h1>
           <p>
             {state.role === "管理视角"
-              ? "重点风险、审核进展，随时掌握。"
-              : "校园餐饮讨论升温，建议优先核验。"}
+              ? `管理视角 · ${pendingReports.length} 份报告待处理，掌握重点风险与交付进展。`
+              : `研判视角 · ${pending.length} 条风险待处理，核验证据并回传判断。`}
           </p>
           <button onClick={() => go("risk/ALT-1103-001")}>
             <span>
@@ -397,21 +392,33 @@ export default function MobileApp() {
           </div>
         </section>
         <div className="m-stats">
-          <button onClick={() => go("metric/records")}>
-            <small>有效记录</small>
+          <button onClick={() => go("alerts")}>
+            <small>重点风险</small>
             <strong>
-              {available.length}
-              <sup>条</sup>
+              {
+                risks.filter(
+                  (r) => r.level === "高风险" && r.status !== "已归档",
+                ).length
+              }
+              <sup>项</sup>
             </strong>
-            <span>点数字查口径</span>
+            <span>点结论查依据</span>
           </button>
-          <button onClick={() => go("topics")}>
-            <small>观察话题</small>
+          <button
+            onClick={() =>
+              go(state.role === "管理视角" ? "reports" : "following")
+            }
+          >
+            <small>{state.role === "管理视角" ? "待审报告" : "关注话题"}</small>
             <strong>
-              {topics.length}
-              <sup>个</sup>
+              {state.role === "管理视角"
+                ? pendingReports.length
+                : state.following.length}
+              <sup>项</sup>
             </strong>
-            <span>持续跟踪变化</span>
+            <span>
+              {state.role === "管理视角" ? "核对后即可审核" : "与我有关的变化"}
+            </span>
           </button>
           <button onClick={() => go("review")}>
             <small>待办事项</small>
@@ -421,6 +428,28 @@ export default function MobileApp() {
             </strong>
             <span>风险与报告</span>
           </button>
+        </div>
+        <CollaborationSummary
+          state={state}
+          mobile
+          onOpen={() => go("collaboration")}
+        />
+        <div className="m-role-queue">
+          <div className="m-section-title">
+            <h2>{state.role === "管理视角" ? "优先审核" : "优先处理"}</h2>
+            <MoreLink onClick={() => go("review")}>全部待办</MoreLink>
+          </div>
+          {state.role === "管理视角" ? (
+            pendingReports.length ? (
+              reportCard(pendingReports[0])
+            ) : (
+              <p className="m-copy">报告已全部处理，可关注最新风险变化。</p>
+            )
+          ) : pending.length ? (
+            riskCard(pending[0], true)
+          ) : (
+            <p className="m-copy">风险待办已清空，可继续跟踪关注话题。</p>
+          )}
         </div>
         <div className="m-shortcuts">
           {[
@@ -437,9 +466,9 @@ export default function MobileApp() {
               color: "purple",
             },
             {
-              label: "来源变化",
+              label: "协同待办",
               icon: Layers3,
-              target: "source",
+              target: "collaboration",
               color: "teal",
             },
             {
@@ -1263,6 +1292,13 @@ export default function MobileApp() {
 
   // Keep audit and publication bound to the exact available evidence revision.
   function reportDetail() {
+    if (route.id === collaborationReportId)
+      return (
+        <CollaborationWorkspace
+          mobile
+          onEvidence={(id) => go(`evidence/${id}`)}
+        />
+      );
     const report = state.reports.find((r) => r.id === route.id);
     if (!report) return <EmptyState title="未找到这份报告" />;
     const docs = articles.filter((a) => report.evidenceIds.includes(a.id));
@@ -1441,6 +1477,13 @@ export default function MobileApp() {
 
   // Show how one explicit source change propagates to evidence, claims and reports.
   function sourceControl() {
+    if (state.collaboration.phase !== "identified")
+      return (
+        <CollaborationWorkspace
+          mobile
+          onEvidence={(id) => go(`evidence/${id}`)}
+        />
+      );
     const impacted = state.reports.filter((r) => r.stale);
     return (
       <>
@@ -1508,7 +1551,7 @@ export default function MobileApp() {
                 "下游报告",
                 state.withdrawn
                   ? `${impacted.length} 份报告引用待更新`
-                  : "3 份报告引用了此来源",
+                  : `${state.reports.filter((r) => r.evidenceIds.includes(controlledDocument)).length} 份报告引用了此来源`,
                 "reports",
               ],
             ].map(([Icon, title, detail, target]) => {
@@ -1681,6 +1724,18 @@ export default function MobileApp() {
         </div>
         <Panel title="我的工作">
           <ActionRow
+            icon={<Layers3 size={20} />}
+            title="双端协同待办"
+            detail="接收研判中枢任务，回传复核与审核结果"
+            onClick={() => go("collaboration")}
+          />
+          <ActionRow
+            icon={<SearchCheck size={20} />}
+            title="观察数据与统计口径"
+            detail="查看有效记录及计算依据"
+            onClick={() => go("metric/records")}
+          />
+          <ActionRow
             icon={<Star size={20} />}
             title="我的关注"
             detail="集中跟踪重点议题"
@@ -1736,7 +1791,7 @@ export default function MobileApp() {
             detail="展示证据、结论与报告联动"
             onClick={() => go("source")}
           />
-          <a className="m-row" href="./#overview">
+          <a className="m-row" href="./#overview" target="_top">
             <span className="m-row-icon">
               <Monitor size={20} />
             </span>
@@ -1754,7 +1809,7 @@ export default function MobileApp() {
           <ActionRow
             icon={<RefreshCw size={20} />}
             title="恢复初始状态"
-            detail="重置本机移动端操作与场景"
+            detail="重置两端共享的样本与协同进度"
             onClick={() => setConfirm("reset")}
           />
         </Panel>
@@ -1774,7 +1829,7 @@ export default function MobileApp() {
         <div className="m-about-mark">
           <Waves size={39} />
           <h1>观澜</h1>
-          <p>移动舆情研判工作台</p>
+          <p>随身风险与决策助手</p>
         </div>
         <Panel title="围绕证据开展研判">
           <DetailSection title="点结论，查依据">
@@ -1796,7 +1851,8 @@ export default function MobileApp() {
         <Panel title="数据与运行说明">
           <p className="m-copy">
             当前为交互展示程序，使用虚构主体和内置样本，观察快照为{" "}
-            {snapshotTime}。操作保存在当前浏览器；移动端与桌面端的操作状态独立。
+            {snapshotTime}
+            。操作保存在当前浏览器；移动端与网页端共享预警、复核、报告与来源状态，同一浏览器内的页面自动同步。跨设备同步需接入服务端。
           </p>
           <p className="m-copy m-top-gap">
             消息为站内场景动态，尚未连接真实推送、采集、模型或账号权限服务。来源撤回演示的是前端状态与引用影响，不代表已执行后端物理删除。
@@ -1808,6 +1864,12 @@ export default function MobileApp() {
 
   const views: Record<string, () => ReactNode> = {
     overview,
+    collaboration: () => (
+      <CollaborationWorkspace
+        mobile
+        onEvidence={(id) => go(`evidence/${id}`)}
+      />
+    ),
     alerts,
     topics: () => topicList(),
     following: () => topicList(true),
@@ -1849,7 +1911,7 @@ export default function MobileApp() {
                 : sectionNames[route.section]}
             </strong>
             {route.section === "overview" && (
-              <span className="m-brand-subtitle">移动工作台</span>
+              <span className="m-brand-subtitle">移动决策助手</span>
             )}
           </div>
           <button
@@ -1899,15 +1961,15 @@ export default function MobileApp() {
         {confirm && (
           <Overlay
             title={
-              confirm === "withdraw" ? "确认来源撤回场景" : "恢复移动端初始状态"
+              confirm === "withdraw" ? "确认来源撤回场景" : "恢复两端共享样本"
             }
             onClose={closeConfirm}
             modal
           >
             <p className="m-copy">
               {confirm === "withdraw"
-                ? "此操作将隐藏该条来源原文、标记关联结论，并使引用该来源的报告进入待更新状态。仅影响当前移动端展示数据。"
-                : "将清除本机移动端的关注、复核、审核和来源场景操作，恢复初始样本。"}
+                ? "此操作将隐藏该条来源原文、标记关联结论，并使引用该来源的报告进入待更新状态。将同步影响本浏览器的网页端和移动端。"
+                : "将清除本机两端共享的关注、复核、审核和协同进度，恢复初始样本。"}
             </p>
             <div className="m-actions">
               <button className="button" onClick={closeConfirm}>
@@ -1920,12 +1982,12 @@ export default function MobileApp() {
                     record(
                       withdrawSource(state),
                       "来源撤回已生效",
-                      "一条来源不可用，3 份报告引用需要更新。",
+                      `一条来源不可用，${state.reports.filter((r) => r.evidenceIds.includes(controlledDocument)).length} 份报告引用需要更新。`,
                       "source",
                     );
                   else {
                     setState(createMobileState());
-                    setToast("已恢复移动端初始状态");
+                    setToast("已恢复两端共享样本");
                   }
                   setChecked(false);
                   setConfirm(null);
