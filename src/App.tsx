@@ -38,6 +38,7 @@ import {
   Shield,
   ShieldAlert,
   Sparkles,
+  Smartphone,
   TrendingUp,
   Waves,
   X,
@@ -2581,6 +2582,14 @@ export default function App() {
             <strong>{pageNames[page]}</strong>
           </div>
           <div className="topbar-right">
+            <a
+              className="button"
+              href="?mobile=1#overview"
+              style={{ textDecoration: "none" }}
+            >
+              <Smartphone size={16} />
+              移动工作台
+            </a>
             <form
               className="global-search"
               onSubmit={(e) => {
