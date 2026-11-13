@@ -4,6 +4,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   advanceCollaboration,
+  caseReportId,
+  caseWorkflow,
+  withdrawSource,
+  reportMarkdown,
   collaborationReportId,
   controlledDocument,
   createMobileState,
@@ -59,9 +63,17 @@ test("desktop and mobile complete the full handoff and source-change lifecycle",
   assert.equal(updated.evidenceIds.includes(controlledDocument), false);
   assert.equal(state.withdrawn, true);
   state = step(state, "approve", "App 端", "", true);
+  assert.equal(state.collaboration.phase, "published");
+  state = step(
+    state,
+    "close",
+    "网页端",
+    "后续跟踪交由承办单位继续办理。",
+    true,
+  );
   assert.equal(state.collaboration.phase, "completed");
-  assert.equal(state.collaboration.events.length, 7);
-  assert.equal(new Set(state.collaboration.events.map((e) => e.id)).size, 7);
+  assert.equal(state.collaboration.events.length, 8);
+  assert.equal(new Set(state.collaboration.events.map((e) => e.id)).size, 8);
   assert.equal(
     parseMobileState(JSON.stringify(state)).collaboration.phase,
     "completed",
@@ -109,4 +121,106 @@ test("earlier mobile state migrates without resetting report versions or follows
   const migrated = parseMobileState(JSON.stringify(old));
   assert.deepEqual(migrated.following, ["TOP-005"]);
   assert.equal(migrated.collaboration.phase, "identified");
+});
+
+// Each event owns its assignment and report; another event cannot overwrite either.
+test("independent events persist assignments and complete without a source-change exercise", () => {
+  let state = createMobileState();
+  const assignment = {
+    department: "消费者权益保护科",
+    assignee: "消费权益值班岗",
+    dueAt: "2026-12-01T17:00",
+    instruction: "核对退款凭证及经营者履约情况。",
+  };
+  const run = (
+    action: CollaborationAction,
+    actor: CollaborationActor,
+    topicId: string,
+    note = "已核对相关材料，后续跟踪退款履约进展。",
+    checked = false,
+  ) => {
+    state = advanceCollaboration(
+      state,
+      action,
+      actor,
+      { note, checked, ...(action === "assign" ? { assignment } : {}) },
+      "2026-11-13 14:00",
+      `${topicId}-${action}-${caseWorkflow(state, topicId).events.length}`,
+      topicId,
+    );
+  };
+  run("assign", "网页端", "TOP-002");
+  run("assign", "网页端", "TOP-001");
+  run("review", "App 端", "TOP-002");
+  run("draft", "网页端", "TOP-002");
+  const pending = state;
+  run("close", "网页端", "TOP-002", "后续跟踪投诉处置进展。", true);
+  assert.equal(state, pending);
+  run("reject", "App 端", "TOP-002", "请补充退款期限与后续跟进安排。");
+  assert.equal(caseWorkflow(state, "TOP-002").phase, "reviewed");
+  assert.equal(
+    state.reports.find((r) => r.id === caseReportId("TOP-002"))?.status,
+    "草稿",
+  );
+  run("draft", "网页端", "TOP-002");
+  run("approve", "App 端", "TOP-002", "", true);
+  run("close", "网页端", "TOP-002", "由承办人员继续跟踪退款进展。", true);
+  assert.equal(caseWorkflow(state, "TOP-001").phase, "assigned");
+  assert.equal(caseWorkflow(state, "TOP-002").phase, "completed");
+  assert.equal(state.statuses["ALT-1103-002"], "已归档");
+  assert.equal(state.withdrawn, false);
+  const report = state.reports.find((r) => r.id === caseReportId("TOP-002"))!;
+  assert.equal(report.revision, 2);
+  assert.equal(report.evidenceIds.length, 16);
+  assert.match(reportMarkdown(report), /已核对相关材料，后续跟踪退款履约进展/);
+  assert.deepEqual(
+    caseWorkflow(parseMobileState(JSON.stringify(state)), "TOP-002").assignment,
+    assignment,
+  );
+  const withdrawn = withdrawSource(state);
+  assert.equal(withdrawn.reports.find((r) => r.id === report.id)?.stale, false);
+});
+
+// Old records remain readable, while invalid metadata cannot enter a case transition.
+test("assignment validation and closed-case source changes preserve audit history", () => {
+  let state = createMobileState();
+  const invalid = {
+    department: "食品监管科",
+    assignee: "值班岗",
+    dueAt: "invalid",
+    instruction: "检查门店",
+  };
+  assert.equal(
+    advanceCollaboration(
+      state,
+      "assign",
+      "网页端",
+      { assignment: invalid },
+      "14:00",
+      "bad",
+    ),
+    state,
+  );
+  assert.equal(
+    advanceCollaboration(
+      state,
+      "assign",
+      "网页端",
+      {},
+      "14:00",
+      "bad",
+      "unknown",
+    ),
+    state,
+  );
+  state = step(state, "assign", "网页端");
+  state = step(state, "review", "App 端");
+  state = step(state, "draft", "网页端");
+  state = step(state, "approve", "App 端", "", true);
+  state = step(state, "close", "网页端", "已完成办理，后续定期跟踪。", true);
+  assert.equal(state.collaboration.phase, "completed");
+  const changed = step(state, "withdraw", "网页端");
+  assert.equal(changed.collaboration.phase, "changed");
+  assert.equal(changed.statuses["ALT-1103-001"], "复核中");
+  assert.equal(changed.collaboration.events.length, 6);
 });

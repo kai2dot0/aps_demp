@@ -7,6 +7,7 @@ import MobileApp from "./MobileApp";
 import "./styles.css";
 import "./mobile.css";
 import "./collaboration.css";
+import "./visualizations.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

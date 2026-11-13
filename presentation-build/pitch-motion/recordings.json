@@ -1,0 +1,74 @@
+[
+  {
+    "name": "overview",
+    "frames": 82,
+    "seconds": 10.341,
+    "fps": 7.929600618895659,
+    "width": 1280,
+    "height": 720
+  },
+  {
+    "name": "evidence",
+    "frames": 80,
+    "seconds": 10.085,
+    "fps": 7.932573128408527,
+    "width": 1500,
+    "height": 900
+  },
+  {
+    "name": "dispatch",
+    "frames": 58,
+    "seconds": 7.307,
+    "fps": 7.937594087860955,
+    "width": 1280,
+    "height": 720
+  },
+  {
+    "name": "mobile",
+    "frames": 63,
+    "seconds": 7.943,
+    "fps": 7.931512023165052,
+    "width": 390,
+    "height": 844
+  },
+  {
+    "name": "report",
+    "frames": 54,
+    "seconds": 6.797,
+    "fps": 7.94468147712226,
+    "width": 1280,
+    "height": 720
+  },
+  {
+    "name": "approve",
+    "frames": 54,
+    "seconds": 6.805,
+    "fps": 7.935341660543719,
+    "width": 390,
+    "height": 844
+  },
+  {
+    "name": "close",
+    "frames": 44,
+    "seconds": 5.531,
+    "fps": 7.9551618152232875,
+    "width": 1280,
+    "height": 720
+  },
+  {
+    "name": "withdrawal",
+    "frames": 78,
+    "seconds": 9.826,
+    "fps": 7.938123346224303,
+    "width": 1280,
+    "height": 720
+  },
+  {
+    "name": "agents",
+    "frames": 89,
+    "seconds": 11.216,
+    "fps": 7.935092724679031,
+    "width": 1500,
+    "height": 900
+  }
+]

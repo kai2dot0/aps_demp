@@ -18,7 +18,7 @@ test("withdrawal invalidates exactly the dependent reports and preserves the sou
   const initial = createMobileState();
   const state = withdrawSource(initial);
   assert.equal(state.reports.filter((r) => r.stale).length, 3);
-  assert.equal(reportDocuments("全部领域", state.withdrawn).length, 11);
+  assert.equal(reportDocuments("全部领域", state.withdrawn).length, 119);
   assert.equal(state.reports.find((r) => r.scope === "消费权益")?.stale, false);
   assert.equal(parseMobileState(JSON.stringify(state)).withdrawn, true);
   assert.equal(withdrawSource(state), state);

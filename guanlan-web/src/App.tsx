@@ -7,9 +7,7 @@ import {
   ArrowRight,
   Bell,
   BookOpen,
-  CalendarDays,
   Check,
-  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -26,7 +24,6 @@ import {
   Layers3,
   ListChecks,
   Menu,
-  MoreHorizontal,
   Network,
   Pause,
   Play,
@@ -60,33 +57,42 @@ import {
   type Report,
 } from "./data";
 import ControlCenter from "./ControlCenter";
+import InsightsDashboard from "./InsightsDashboard";
+import Showcase from "./Showcase";
+import {
+  AgentTopology,
+  EvidenceGraph,
+  ReportEvolution,
+  ReportMetrics,
+  RuleComparison,
+  SourceAnalysis,
+  TopicBubbles,
+  TopicEvolution,
+} from "./Visualizations";
 import CollaborationWorkspace, {
   CollaborationSummary,
 } from "./CollaborationWorkspace";
 import { useWorkspaceState } from "./workspaceStore";
 import {
   approveReport,
-  collaborationReportId,
+  caseReportId,
   controlledDocument,
   createMobileState,
   rebuildReport,
   reportDocuments,
+  reportTopicMetrics,
+  reportMarkdown,
   type MobileReport,
 } from "./mobileState";
-import { signatureFeatures } from "./capabilities";
 import {
   Badge,
   DetailSection,
   EmptyState,
-  MoreLink,
   Overlay,
   PageHeader,
   Panel,
   SearchField,
-  SourceDonut,
   Sparkline,
-  StatCard,
-  TrendChart,
   toneFor,
 } from "./components";
 
@@ -178,8 +184,19 @@ function csvCell(value: string) {
   );
 }
 function currentPage(): Page {
-  const hash = location.hash.slice(1);
+  const hash = location.hash.slice(1).split("/")[0];
   return hash in pageNames ? (hash as Page) : "overview";
+}
+
+// Validate a deep-linked category before applying it to the topic view.
+function currentCategory() {
+  if (currentPage() !== "topics") return "全部领域";
+  try {
+    const value = decodeURIComponent(location.hash.split("/")[1] || "全部领域");
+    return categories.includes(value) ? value : "全部领域";
+  } catch {
+    return "全部领域";
+  }
 }
 
 export default function App() {
@@ -209,15 +226,12 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState("全部领域");
+  const [category, setCategory] = useState(currentCategory);
   const [filter, setFilter] = useState("全部");
   const [source, setSource] = useState("全部来源");
-  const [period, setPeriod] = useState("24小时");
   const [tablePage, setTablePage] = useState(1);
   const [globalQuery, setGlobalQuery] = useState("");
   const [busy, setBusy] = useState(false);
-  const [replay, setReplay] = useState(false);
-  const [lastReplay, setLastReplay] = useState("");
   const [compact, setCompact] = useState(false);
   const [displayMode, setDisplayMode] = useState("对外展示");
   const [platformTab, setPlatformTab] = useState("features");
@@ -237,7 +251,7 @@ export default function App() {
       setPage(currentPage());
       setQuery("");
       setFilter("全部");
-      setCategory("全部领域");
+      setCategory(currentCategory());
       setSource("全部来源");
       setTablePage(1);
       setSelected([]);
@@ -253,10 +267,14 @@ export default function App() {
   }, [toast]);
   useEffect(() => {
     document.title = `${pageNames[page]} · 观澜`;
+    window.scrollTo({ top: 0, behavior: "instant" });
   }, [page]);
-  const go = (next: Page) => {
+  const go = (next: Page, selectedCategory = "全部领域") => {
     setPage(next);
-    location.hash = next;
+    location.hash =
+      next === "topics" && selectedCategory !== "全部领域"
+        ? `${next}/${encodeURIComponent(selectedCategory)}`
+        : next;
     setMobileNav(false);
     setDialog(null);
     setQuery("");
@@ -269,13 +287,13 @@ export default function App() {
   };
   // Collaboration reports open in their governed workspace, preserving the handoff order.
   const open = (kind: NonNullable<Dialog>["kind"], id = "") => {
-    if (
-      (kind === "report" && id === collaborationReportId) ||
-      (kind === "risk" &&
-        id === "ALT-1103-001" &&
-        workspace.collaboration.phase !== "identified")
-    ) {
+    const eventTopic =
+      kind === "report"
+        ? topics.find((t) => caseReportId(t.id) === id)
+        : undefined;
+    if (eventTopic) {
       go("collaboration");
+      location.hash = `collaboration/${eventTopic.id}`;
       return;
     }
     setDialog({ kind, id } as Dialog);
@@ -405,16 +423,9 @@ export default function App() {
 
   // Report text uses only the fixed observation snapshot and its traceable sample records.
   function reportText(report: MobileReport) {
-    const items = availableArticles.filter((a) =>
-      report.evidenceIds.includes(a.id),
-    );
-    return `# ${report.title}\n\n报告编号：${report.id}\n观察快照：${snapshotTime}\n生成日期：${report.date}\n监管领域：${report.scope}\n覆盖口径：${report.coverage}\n状态：${report.status}\n\n## 观察摘要\n本报告基于所选领域的 ${items.length} 条可查阅样本记录。采集源覆盖范围有限，结论仅适用于本次观察。\n\n## 重点关注\n${topics
-      .filter((t) => report.scope === "全部领域" || t.category === report.scope)
-      .map((t) => `- ${t.title}：${t.summary}`)
-      .join(
-        "\n",
-      )}\n\n## 研判建议\n核实高关注事项的原始记录与主体信息；对尚无交叉证据的内容保留不确定性；持续跟踪后续变化。\n\n## 证据索引\n${items.map((a) => `- [${a.evidence}] ${workspace.withdrawn && a.id === controlledDocument ? "来源已撤回 · 内容不可用" : a.title}（${a.source}，${a.time}）`).join("\n")}\n\n数据说明：内置样本；主体及人员为虚构信息。报告不能作为已核实的事实结论。`;
+    return reportMarkdown(report, workspace.withdrawn);
   }
+
   async function createReport(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -454,281 +465,18 @@ export default function App() {
     notify("报告已生成，等待人工审核");
   }
 
+  // Keep the overview and focused presentation connected to the same workspace.
   function renderOverview() {
     return (
-      <>
-        <PageHeader
-          title="研判与管理中枢"
-          description="汇聚全量信息，深挖证据与规则，形成可交付、可追溯的专业判断。"
-        >
-          <span className="date-pill">
-            <CalendarDays size={15} />
-            2026年11月3日
-          </span>
-          <button
-            className="button"
-            onClick={() => {
-              downloadFile(
-                "舆情态势概览.txt",
-                `观澜 · 市场监管舆情态势\n数据快照：${snapshotTime}\n样本汇总：8,620 条\n活跃话题：24 个\n风险线索：${risks.length} 条\n待确认：${countPending} 条\n覆盖口径：相对本次观察\n内置样本数据，不代表实时生产数据。`,
-              );
-              notify("概览已导出");
-            }}
-          >
-            <ArrowDownToLine size={15} />
-            导出概览
-          </button>
-          {reportButton}
-        </PageHeader>
-        <section className="desktop-mission">
-          <div>
-            <span>PROFESSIONAL INTELLIGENCE CENTER</span>
-            <h2>把信息看全，把判断做深。</h2>
-            <p>从证据比对、专题研判到规则治理，为移动端提供可靠的决策依据。</p>
-          </div>
-          <div className="desktop-mission-actions">
-            <button onClick={() => go("collaboration")}>
-              <Layers3 size={20} />
-              <strong>专题研判与协同</strong>
-              <small>证据 · 复核 · 报告</small>
-            </button>
-            <button onClick={() => go("evidence")}>
-              <Fingerprint size={20} />
-              <strong>证据审查</strong>
-              <small>来源 · 引用 · 版本</small>
-            </button>
-            <button onClick={() => go("platform")}>
-              <Settings2 size={20} />
-              <strong>治理与运行</strong>
-              <small>规则 · 模型 · 质量</small>
-            </button>
-          </div>
-        </section>
-        <CollaborationSummary
-          state={workspace}
-          onOpen={() => go("collaboration")}
-        />
-        <div className="stats-grid">
-          <StatCard
-            title="今日采集舆情"
-            value="8,620"
-            unit="条"
-            change="12.8%"
-            detail="较上一观察日"
-            icon={Radio}
-            tone="blue"
-            values={[10, 20, 14, 32, 26, 45, 34, 50, 46, 62]}
-          />
-          <StatCard
-            title="活跃话题"
-            value="24"
-            unit="个"
-            change="3"
-            detail="新增话题"
-            icon={TrendingUp}
-            tone="purple"
-            values={[15, 17, 16, 23, 20, 25, 26, 22, 29, 32]}
-          />
-          <StatCard
-            title="风险预警"
-            value={String(risks.filter((r) => r.status !== "已归档").length)}
-            unit="条"
-            detail={`${countPending} 条待确认 · 2 条高风险`}
-            icon={ShieldAlert}
-            tone="orange"
-            values={[12, 8, 14, 10, 20, 12, 18, 16, 25, 22]}
-          />
-          <StatCard
-            title="分析完成率"
-            value="98.6"
-            unit="%"
-            change="1.2%"
-            detail="处理链路稳定"
-            icon={CheckCheck}
-            tone="teal"
-            values={[10, 14, 18, 15, 24, 28, 26, 30, 32, 34]}
-          />
-        </div>
-        <div className="dashboard-grid">
-          <Panel
-            title="舆情传播趋势"
-            subtitle="观察窗口内的讨论量变化"
-            action={
-              <div className="segments small">
-                {["24小时", "7天", "30天"].map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPeriod(p)}
-                    className={period === p ? "active" : ""}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            }
-          >
-            <div className="chart-legend">
-              <span>
-                <i className="blue-dot" />
-                舆情总量
-              </span>
-              <span>
-                <i className="orange-dot" />
-                负面舆情
-              </span>
-              <span className="muted">单位：条</span>
-            </div>
-            <TrendChart period={period} />
-          </Panel>
-          <Panel
-            title="信息来源分布"
-            subtitle="多源汇聚，交叉观察"
-            action={
-              <button
-                className="icon-button"
-                aria-label="查看采集管理"
-                onClick={() => go("sources")}
-              >
-                <MoreHorizontal size={20} />
-              </button>
-            }
-          >
-            <SourceDonut />
-          </Panel>
-        </div>
-        <div className="dashboard-grid lower">
-          <Panel
-            title="热点话题"
-            subtitle="发现正在升温的监管议题"
-            action={<MoreLink onClick={() => go("topics")} />}
-          >
-            <div className="table-scroll">
-              <table className="topic-table">
-                <thead>
-                  <tr>
-                    <th>排名 / 话题</th>
-                    <th>讨论量</th>
-                    <th>热度变化</th>
-                    <th>风险等级</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {topics.slice(0, 5).map((topic, index) => (
-                    <tr key={topic.id} onClick={() => open("topic", topic.id)}>
-                      <td>
-                        <div className="rank-title">
-                          <span className={`rank r${index}`}>
-                            {String(index + 1).padStart(2, "0")}
-                          </span>
-                          <div>
-                            <button
-                              className="table-title"
-                              onClick={() => open("topic", topic.id)}
-                            >
-                              {topic.title}
-                            </button>
-                            <small>{topic.category}</small>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="number">{topic.count.toLocaleString()}</td>
-                      <td>
-                        <span className={topic.change > 0 ? "rise" : "fall"}>
-                          {topic.change > 0 ? "↗ +" : "↘ "}
-                          {topic.change}%
-                        </span>
-                      </td>
-                      <td>
-                        <Badge tone={toneFor(topic.risk)} dot>
-                          {topic.risk}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Panel>
-          <Panel
-            title="最新风险预警"
-            subtitle={`${countPending} 条线索等待确认`}
-            action={<MoreLink onClick={() => go("alerts")} />}
-          >
-            <div className="risk-feed">
-              {risks.slice(0, 3).map((r) => (
-                <button
-                  className="risk-feed-item"
-                  key={r.id}
-                  onClick={() => open("risk", r.id)}
-                >
-                  <span className={`risk-mark ${toneFor(r.level)}`}>
-                    <ShieldAlert size={17} />
-                  </span>
-                  <div>
-                    <div className="feed-meta">
-                      <Badge tone={toneFor(r.level)}>{r.level}</Badge>
-                      <time>{r.time}</time>
-                    </div>
-                    <h4>{r.title}</h4>
-                    <p>
-                      {r.category}
-                      <span>·</span>
-                      {r.status}
-                    </p>
-                  </div>
-                  <ChevronRight size={16} />
-                </button>
-              ))}
-            </div>
-          </Panel>
-        </div>
-        <div className="overview-signatures">
-          {signatureFeatures.slice(0, 4).map((f) => (
-            <button
-              key={f.number}
-              onClick={() => {
-                setPlatformTab(f.tab);
-                go("platform");
-              }}
-            >
-              <span>{f.number}</span>
-              <div>
-                <strong>{f.title}</strong>
-                <small>{f.description}</small>
-              </div>
-              <ArrowRight size={15} />
-            </button>
-          ))}
-        </div>
-        <div className="pipeline-overview">
-          <div className="pipeline-label">
-            <span className="pipeline-logo">
-              <Network size={22} />
-            </span>
-            <div>
-              <strong>多智能体协同引擎</strong>
-              <small>从数据到洞察，持续有序运转</small>
-            </div>
-          </div>
-          <div className="pipeline-steps">
-            {["数据采集", "语义感知", "话题分析", "风险研判", "报告生成"].map(
-              (step, i) => (
-                <div key={step}>
-                  <span>
-                    <i />
-                    {step}
-                  </span>
-                  {i < 4 && <ChevronRight size={16} />}
-                </div>
-              ),
-            )}
-          </div>
-          <button className="text-button" onClick={() => go("agents")}>
-            运行详情
-            <ArrowRight size={15} />
-          </button>
-        </div>
-      </>
+      <InsightsDashboard
+        state={workspace}
+        onNavigate={go}
+        onTopic={(id) => open("topic", id)}
+        onRisk={(id) => open("risk", id)}
+        onScene={(scene) => {
+          location.hash = `showcase/${scene}`;
+        }}
+      />
     );
   }
   function renderMonitor() {
@@ -743,9 +491,10 @@ export default function App() {
             导出{selected.length ? `所选 ${selected.length} 条` : "记录"}
           </button>
         </PageHeader>
+        <SourceAnalysis records={availableArticles} onSource={setSource} />
         <Panel
           title="观察记录"
-          subtitle={`当前可查阅 ${availableArticles.length} 条代表性样本；已撤回记录不再展示`}
+          subtitle={`当前可查阅 ${availableArticles.length} 条原始记录；已撤回内容停止读取`}
           action={
             <Badge tone="blue" dot>
               快照已冻结
@@ -912,6 +661,16 @@ export default function App() {
           {categorySelect}
           <span className="muted">{filteredTopics.length} 个重点话题</span>
         </div>
+        <Panel
+          title="重点话题风险分布"
+          subtitle="气泡面积对应讨论量，点击进入话题研判"
+          className="viz-topic-map-panel"
+        >
+          <TopicBubbles
+            items={filteredTopics}
+            onSelect={(id) => open("topic", id)}
+          />
+        </Panel>
         <div className="topic-card-grid">
           {filteredTopics.map((t, i) => (
             <article className="topic-card" key={t.id}>
@@ -1094,6 +853,13 @@ export default function App() {
         >
           {reportButton}
         </PageHeader>
+        <Panel
+          title="最新交付版本"
+          subtitle="版本、引用与审核状态同步更新"
+          className="viz-page-panel"
+        >
+          <ReportEvolution report={list[0]} withdrawn={workspace.withdrawn} />
+        </Panel>
         <div className="report-feature">
           <div className="report-feature-icon">
             <FileCheck2 size={34} />
@@ -1230,6 +996,16 @@ export default function App() {
             证据状态变化将影响下游引用。永久撤回的原始内容不再展示，仅保留审计标记与失效原因。
           </p>
         </div>
+        <Panel
+          title="证据关系全景"
+          subtitle="连锁餐饮风险专题 · 点击节点查看引用依据"
+          className="viz-page-panel"
+        >
+          <EvidenceGraph
+            state={workspace}
+            onEvidence={(id) => open("evidence", id)}
+          />
+        </Panel>
         <Panel title="证据台账" action={segments(["全部", "有效", "已撤回"])}>
           <div className="filter-bar">
             <SearchField
@@ -1268,7 +1044,7 @@ export default function App() {
                     <td>
                       <code>
                         {workspace.withdrawn && a.id === controlledDocument
-                          ? "v2 · source_withdrawn"
+                          ? "v2 · 来源已撤回"
                           : "v1 · normalized"}
                       </code>
                     </td>
@@ -1412,9 +1188,12 @@ export default function App() {
         >
           <span className="date-pill">
             <Clock3 size={14} />
-            样本快照 · 14:30
+            观察快照 · 14:30
           </span>
         </PageHeader>
+        <div className="viz-page-panel">
+          <SourceAnalysis records={availableArticles} />
+        </div>
         <div className="source-grid">
           {sourceRows.map((s, i) => (
             <article className="source-card" key={s.id}>
@@ -1523,63 +1302,21 @@ export default function App() {
       <>
         <PageHeader
           title="智能体运行"
-          description="观察从采集到报告的协同链路，明确每个智能体的职责与资源池。"
+          description="多智能体各司其职，从原始信息到可审核的研判交付。"
+        />
+        <Panel
+          title="多智能体协同链路"
+          subtitle="15 个业务智能体 · 点击节点，回放分析过程"
+          className="viz-page-panel"
         >
-          <button
-            disabled={replay}
-            className="button primary"
-            onClick={() => {
-              setReplay(true);
-              setTimeout(() => {
-                setReplay(false);
-                setLastReplay(new Date().toLocaleTimeString("zh-CN"));
-                notify("12 条样本回放完成，可查看链路记录");
-              }, 1600);
-            }}
-          >
-            <Play size={15} />
-            {replay ? "样本回放中…" : "回放样本链路"}
-          </button>
-        </PageHeader>
-        <div className="agent-flow">
-          {[
-            { title: "采集与标准化", label: "IO / CPU", icon: Database },
-            { title: "内容感知", label: "CPU / LLM", icon: Sparkles },
-            { title: "话题与趋势", label: "CPU", icon: TrendingUp },
-            { title: "风险研判", label: "CPU / RULES", icon: Shield },
-            { title: "报告与复核", label: "LLM / IO", icon: FileCheck2 },
-          ].map((item, i) => (
-            <div
-              className={replay ? "flow-node running" : "flow-node"}
-              key={item.title}
-            >
-              <div>
-                <item.icon size={23} />
-                <span>
-                  <strong>{item.title}</strong>
-                  <small>{item.label}</small>
-                </span>
-                <Check size={14} />
-              </div>
-              {i < 4 && <ArrowRight className="flow-arrow" size={18} />}
-            </div>
-          ))}
-        </div>
-        {lastReplay && (
-          <div className="notice success">
-            <CheckCheck size={18} />
-            <p>
-              {lastReplay} · 本地样本回放完成：12 条输入 → 12 条标准化 → 6
-              个话题 → 6 条风险线索。未调用外部模型。
-            </p>
-          </div>
-        )}
+          <AgentTopology />
+        </Panel>
         <Panel
           title="业务智能体"
           subtitle="15 个智能体 · 3 类资源池 · 样本运行快照"
           action={
             <Badge tone="green" dot>
-              {replay ? "样本运行中" : "就绪"}
+              就绪
             </Badge>
           }
         >
@@ -1633,7 +1370,7 @@ export default function App() {
                     </td>
                     <td>
                       <Badge tone="green" dot>
-                        {replay ? "运行中" : "就绪"}
+                        就绪
                       </Badge>
                     </td>
                     <td>
@@ -1738,6 +1475,12 @@ export default function App() {
           <blockquote>{article.content}</blockquote>
           <div className="record-note">内置样本记录 · 主体及人员为虚构信息</div>
         </DetailSection>
+        <DetailSection title="关键引文与核验边界">
+          <blockquote>{article.quote}</blockquote>
+          <p className="record-note">
+            {article.verification} · 原文首句精确定位 · {article.location}
+          </p>
+        </DetailSection>
         <DetailSection title="证据与版本">
           <dl className="key-values">
             <div>
@@ -1750,11 +1493,11 @@ export default function App() {
             </div>
             <div>
               <dt>采集时间</dt>
-              <dd>2026-11-03 {article.time}</dd>
+              <dd>{article.observedAt.replace("T", " ").slice(0, 16)}</dd>
             </div>
             <div>
               <dt>规范化版本</dt>
-              <dd>v1 · active</dd>
+              <dd>v1 · 当前有效</dd>
             </div>
             <div>
               <dt>覆盖范围</dt>
@@ -1865,7 +1608,8 @@ export default function App() {
               <div>
                 <strong>观察快照 · 2026-11-03 14:30</strong>
                 <p>
-                  12 条可查阅记录 · 6 个重点话题 · {risks.length} 条风险线索
+                  {availableArticles.length} 条可查阅记录 · {topics.length}{" "}
+                  个重点话题 · {risks.length} 条风险线索
                 </p>
               </div>
             </div>
@@ -1922,12 +1666,12 @@ export default function App() {
                 </div>
                 <div>
                   <dt>状态版本</dt>
-                  <dd>v2 · source_withdrawn</dd>
+                  <dd>v2 · 来源已撤回</dd>
                 </div>
                 <div>
                   <dt>Claim 状态</dt>
                   <dd>
-                    <Badge tone="red">active · 来源已撤回</Badge>
+                    <Badge tone="red">当前结论 · 来源已撤回</Badge>
                   </dd>
                 </div>
                 <div>
@@ -1982,16 +1726,12 @@ export default function App() {
               <span key={k}># {k}</span>
             ))}
           </div>
-          <DetailSection title="话题热度演进">
-            <div className="topic-detail-trend">
-              <Sparkline values={t.trend} />
-              <div>
-                <span>00:00</span>
-                <span>06:00</span>
-                <span>12:00</span>
-                <span>观察时点</span>
-              </div>
-            </div>
+          <DetailSection title="话题热度与事件演进">
+            <TopicEvolution
+              topic={t}
+              state={workspace}
+              onEvidence={(id) => open("evidence", id)}
+            />
           </DetailSection>
           <DetailSection title="研判摘要">
             <p className="body-copy">
@@ -2061,6 +1801,21 @@ export default function App() {
           </div>
           <h2 className="detail-title">{r.title}</h2>
           <p className="body-copy">{r.detail}</p>
+          <div className="detail-actions">
+            <button
+              className="button primary"
+              onClick={() => {
+                go("collaboration");
+                location.hash = `collaboration/${r.topic}`;
+              }}
+            >
+              进入事件处置
+              <ArrowRight size={15} />
+            </button>
+          </div>
+          <DetailSection title="观察信号与关注阈值">
+            <RuleComparison topic={t} />
+          </DetailSection>
           <DetailSection title="规则命中与依据">
             <div className="rule-box">
               <span>
@@ -2245,7 +2000,7 @@ export default function App() {
               </h3>
               <p>
                 本次研判整理所选领域的 <b>{items.length} 条</b>
-                可查阅样本记录。讨论主要围绕
+                可查阅原始记录。讨论主要围绕
                 {r.scope === "全部领域"
                   ? "食品安全、消费权益、价格监管等领域"
                   : r.scope}
@@ -2254,16 +2009,14 @@ export default function App() {
               <h3>
                 <span>02</span>重点话题与风险信号
               </h3>
-              {topics
-                .filter((t) => r.scope === "全部领域" || t.category === r.scope)
-                .slice(0, 4)
-                .map((t) => (
-                  <div className="report-topic" key={t.id}>
-                    <strong>{t.title}</strong>
-                    <Badge tone={toneFor(t.risk)}>{t.risk}</Badge>
-                    <p>{t.summary}</p>
-                  </div>
-                ))}
+              <ReportMetrics report={r} />
+              {reportTopicMetrics(r).map((t) => (
+                <div className="report-topic" key={t.id}>
+                  <strong>{t.title}</strong>
+                  <Badge tone={toneFor(t.risk)}>{t.risk}</Badge>
+                  <p>{t.summary}</p>
+                </div>
+              ))}
               <h3>
                 <span>03</span>研判建议
               </h3>
@@ -2289,9 +2042,20 @@ export default function App() {
                 </button>
               ))}
               {items.length > 6 && (
-                <p className="record-note">
-                  另有 {items.length - 6} 条记录，完整索引包含在导出文件中。
-                </p>
+                <details className="viz-all-evidence">
+                  <summary>展开其余 {items.length - 6} 条证据</summary>
+                  {items.slice(6).map((a, i) => (
+                    <button
+                      className="report-citation"
+                      key={a.id}
+                      onClick={() => open("evidence", a.id)}
+                    >
+                      <span>[{i + 7}]</span>
+                      {a.title}
+                      <ExternalLink size={12} />
+                    </button>
+                  ))}
+                </details>
               )}
               <div className="document-footnote">
                 <Shield size={17} />
@@ -2671,6 +2435,13 @@ export default function App() {
 
   const views = {
     overview: renderOverview,
+    showcase: () => (
+      <Showcase
+        state={workspace}
+        onExit={() => go("overview")}
+        onEvidence={(id) => open("evidence", id)}
+      />
+    ),
     collaboration: () => (
       <CollaborationWorkspace onEvidence={(id) => open("evidence", id)} />
     ),
@@ -2693,7 +2464,9 @@ export default function App() {
     ),
   };
   return (
-    <div className={`app ${compact ? "compact" : ""}`}>
+    <div
+      className={`app ${compact ? "compact" : ""} ${page === "showcase" ? "presentation-mode" : ""}`}
+    >
       <div
         className={`sidebar-shade ${mobileNav ? "visible" : ""}`}
         onClick={() => setMobileNav(false)}
@@ -2705,7 +2478,7 @@ export default function App() {
           </span>
           <span>
             <strong>观澜</strong>
-            <small>专业研判与管理中枢</small>
+            <small>市场监管舆情平台</small>
           </span>
           <span className="brand-version">PRO</span>
         </button>
@@ -2747,8 +2520,8 @@ export default function App() {
           <div className="engine-status">
             <span className="status-dot" />
             <div>
-              <strong>协同引擎就绪</strong>
-              <small>15 个业务智能体 · 样本快照</small>
+              <strong>业务工作台</strong>
+              <small>五大监管领域 · 样本环境</small>
             </div>
             <Activity size={17} />
           </div>
@@ -2781,13 +2554,17 @@ export default function App() {
             <strong>{pageNames[page]}</strong>
           </div>
           <div className="topbar-right">
+            <button className="button" onClick={() => go("showcase")}>
+              <Layers3 size={16} />
+              研判大屏
+            </button>
             <a
               className="button"
               href="?mobile=1#overview"
               style={{ textDecoration: "none" }}
             >
               <Smartphone size={16} />
-              移动决策助手
+              移动工作台
             </a>
             <form
               className="global-search"

@@ -63,7 +63,10 @@ import {
 import {
   approveReport,
   controlledDocument,
-  collaborationReportId,
+  reportMarkdown,
+  caseReportId,
+  caseWorkflow,
+  collaborationTask,
   createMobileState,
   rebuildReport,
   submitReview,
@@ -73,20 +76,27 @@ import {
   type ReviewResult,
 } from "./mobileState";
 import { useWorkspaceState } from "./workspaceStore";
+import {
+  MobileRiskPulse,
+  ReportEvolution,
+  ReportMetrics,
+  RuleComparison,
+  TopicEvolution,
+} from "./Visualizations";
 import CollaborationWorkspace, {
   CollaborationSummary,
 } from "./CollaborationWorkspace";
 
 const tabs = [
   { id: "overview", label: "总览", icon: Home },
-  { id: "alerts", label: "预警", icon: ShieldAlert },
+  { id: "collaboration", label: "待办", icon: ListChecks },
   { id: "topics", label: "话题", icon: TrendingUp },
   { id: "reports", label: "报告", icon: FileText },
   { id: "me", label: "我的", icon: UserRound },
 ] as const;
 const sectionNames: Record<string, string> = {
   overview: "随身工作台",
-  collaboration: "协同待办",
+  collaboration: "事件待办",
   alerts: "风险预警",
   topics: "话题洞察",
   reports: "研判报告",
@@ -167,16 +177,25 @@ export default function MobileApp() {
   const pendingReports = state.reports.filter(
     (r) => r.status === "待审核" || r.stale,
   );
+  const pendingCases = topics.filter(
+    (t) =>
+      caseWorkflow(state, t.id).phase !== "completed" &&
+      collaborationTask(state, t.id).owner === "App 端",
+  ).length;
   const unread = state.activity.filter(
     (a) => !state.readActivity.includes(a.id),
   ).length;
   const available = articles.filter(
     (a) => !state.withdrawn || a.id !== controlledDocument,
   );
-  const activeTab = ["risk", "review", "history", "collaboration"].includes(
-    route.section,
-  )
-    ? "alerts"
+  const activeTab = [
+    "risk",
+    "review",
+    "history",
+    "collaboration",
+    "alerts",
+  ].includes(route.section)
+    ? "collaboration"
     : ["topic", "following"].includes(route.section)
       ? "topics"
       : route.section === "report"
@@ -211,12 +230,10 @@ export default function MobileApp() {
 
   // Navigate through real URLs so refresh and browser back preserve each detail view.
   function go(target: string) {
-    if (
-      target === `report/${collaborationReportId}` ||
-      (target === "risk/ALT-1103-001" &&
-        state.collaboration.phase !== "identified")
-    )
-      target = "collaboration";
+    const eventTopic = topics.find(
+      (t) => target === `report/${caseReportId(t.id)}`,
+    );
+    if (eventTopic) target = `collaboration/${eventTopic.id}`;
     previousRoutes.current.push(location.hash.slice(1) || "overview");
     location.hash = target;
   }
@@ -226,7 +243,7 @@ export default function MobileApp() {
     location.hash =
       previousRoutes.current.pop() ||
       (route.section === "risk"
-        ? "alerts"
+        ? "collaboration"
         : route.section === "topic"
           ? "topics"
           : route.section === "report"
@@ -303,7 +320,7 @@ export default function MobileApp() {
         <div className="m-card-bottom">
           <span>
             <Shield size={13} />
-            规则定级 · 依据可查
+            风险依据 · 依据可查
           </span>
           <Badge tone={toneFor(risk.status)}>{risk.status}</Badge>
           <ChevronRight size={16} />
@@ -359,14 +376,14 @@ export default function MobileApp() {
         <section className="m-hero">
           <div className="m-hero-top">
             <span>
-              <span className="m-live-dot" /> 随身风险与决策助手
+              <span className="m-live-dot" /> 待办工作台
             </span>
             <span>11.03 / 周二</span>
           </div>
           <h1>
-            重要风险，随时掌握
+            重点事项
             <br />
-            <em>关键判断，及时回应</em>
+            <em>核验与审批</em>
           </h1>
           <p>
             {state.role === "管理视角"
@@ -451,6 +468,30 @@ export default function MobileApp() {
             <p className="m-copy">风险待办已清空，可继续跟踪关注话题。</p>
           )}
         </div>
+        <MobileRiskPulse state={state} onOpen={() => go("alerts")} />
+        <Panel
+          title="观察走势"
+          className="m-compact-trend"
+          subtitle="本期舆情趋势 · 24小时"
+          action={
+            <select
+              aria-label="趋势观察周期"
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+            >
+              <option>24小时</option>
+              <option>7天</option>
+              <option>30天</option>
+            </select>
+          }
+        >
+          <TrendChart period={period} />
+          <div className="m-chart-legend">
+            <i />
+            舆情声量 <i />
+            负面表达
+          </div>
+        </Panel>
         <div className="m-shortcuts">
           {[
             {
@@ -466,7 +507,7 @@ export default function MobileApp() {
               color: "purple",
             },
             {
-              label: "协同待办",
+              label: "事件待办",
               icon: Layers3,
               target: "collaboration",
               color: "teal",
@@ -509,28 +550,6 @@ export default function MobileApp() {
           .filter((r) => r.status !== "已归档")
           .slice(0, 2)
           .map((r) => riskCard(r, true))}
-        <Panel
-          title="舆情走势"
-          subtitle="样本汇总趋势 · 相对本次观察"
-          action={
-            <select
-              aria-label="趋势观察周期"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
-            >
-              <option>24小时</option>
-              <option>7天</option>
-              <option>30天</option>
-            </select>
-          }
-        >
-          <TrendChart period={period} />
-          <div className="m-chart-legend">
-            <i />
-            舆情声量 <i />
-            负面表达
-          </div>
-        </Panel>
         <button
           className="m-brief-link"
           onClick={() => go(`report/${state.reports[0].id}`)}
@@ -634,6 +653,13 @@ export default function MobileApp() {
             {risk.id} · 11月03日 {risk.time}
           </small>
         </div>
+        <button
+          className="button m-full m-top-gap"
+          onClick={() => go(`collaboration/${topic.id}`)}
+        >
+          查看事件办理
+          <ArrowRight size={15} />
+        </button>
         {needsSourceReview && (
           <div className="m-notice warning">
             <ShieldAlert size={19} />
@@ -643,7 +669,7 @@ export default function MobileApp() {
         <Panel
           title={
             <>
-              <Sparkles size={17} /> 模型理解
+              <Sparkles size={17} /> 关注事项
             </>
           }
           subtitle="识别议题与公众诉求，不直接判定事实"
@@ -660,7 +686,7 @@ export default function MobileApp() {
         <Panel
           title={
             <>
-              <Shield size={17} /> 规则定级
+              <Shield size={17} /> 风险依据
             </>
           }
           action={<Badge tone="neutral">v1.2</Badge>}
@@ -670,6 +696,7 @@ export default function MobileApp() {
               ? "讨论升温与负面表达进入重点关注区间，触发高风险研判线索。"
               : "结合话题聚集、热度变化与负面表达，进入分级跟踪。"}
           </p>
+          <RuleComparison topic={topic} />
           <div className="m-rule-metrics">
             <button onClick={() => go(`metric/${topic.id}`)}>
               <small>讨论量</small>
@@ -696,7 +723,7 @@ export default function MobileApp() {
             </>
           }
           action={
-            <span className="m-subtle">{evidence.length} 条展示记录</span>
+            <span className="m-subtle">{evidence.length} 条关联原文</span>
           }
         >
           {evidence.map(evidenceRow)}
@@ -900,7 +927,9 @@ export default function MobileApp() {
             description="可以在话题页点击星标关注，或调整搜索关键词。"
           />
         )}
-        <p className="m-footnote">讨论量为展示汇总值，证据列表提供代表记录。</p>
+        <p className="m-footnote">
+          统计来自本期关联原文，撤回材料保留观察计数。
+        </p>
       </>
     );
   }
@@ -929,6 +958,13 @@ export default function MobileApp() {
             </button>
           </div>
         </div>
+        <button
+          className="button m-full m-top-gap"
+          onClick={() => go(`collaboration/${topic.id}`)}
+        >
+          查看事件办理
+          <ArrowRight size={15} />
+        </button>
         <Panel title="话题研判" action={<Badge tone="blue">模型提炼</Badge>}>
           <p className="m-copy">{topic.summary}</p>
           {state.withdrawn &&
@@ -974,22 +1010,12 @@ export default function MobileApp() {
             <span>观察截止 14:30</span>
           </div>
         </Panel>
-        <Panel title="事件脉络" subtitle="按采集时间排列，事实仍需核验">
-          <div className="m-timeline">
-            {[...evidence].reverse().map((a) => (
-              <button key={a.id} onClick={() => go(`evidence/${a.id}`)}>
-                <i />
-                <small>
-                  11.03 {a.time} · {a.source}
-                </small>
-                <p>
-                  {state.withdrawn && a.id === controlledDocument
-                    ? "该条来源已撤回，查看引用影响"
-                    : a.title}
-                </p>
-              </button>
-            ))}
-          </div>
+        <Panel title="话题演进" subtitle="观察趋势与关键依据">
+          <TopicEvolution
+            topic={topic}
+            state={state}
+            onEvidence={(id) => go(`evidence/${id}`)}
+          />
         </Panel>
         {risk && (
           <>
@@ -1046,6 +1072,15 @@ export default function MobileApp() {
             <>
               <h2 className="m-article-title">{article.title}</h2>
               <p className="m-article-content">{article.content}</p>
+              <div className="m-notice">
+                <Fingerprint size={18} />
+                <span>
+                  <strong>关键引文 · 原文首句</strong>
+                  <br />
+                  {article.quote}
+                </span>
+              </div>
+              <p className="m-caption">{article.verification} · 内置虚构样本</p>
             </>
           )}
           <dl className="m-meta">
@@ -1055,11 +1090,11 @@ export default function MobileApp() {
             </div>
             <div>
               <dt>来源标识</dt>
-              <dd>{article.author}</dd>
+              <dd>{withdrawn ? "已停止展示" : article.author}</dd>
             </div>
             <div>
               <dt>采集时间</dt>
-              <dd>2026-11-03 {article.time}</dd>
+              <dd>{article.observedAt.replace("T", " ").slice(0, 16)}</dd>
             </div>
             <div>
               <dt>证据编号</dt>
@@ -1096,14 +1131,14 @@ export default function MobileApp() {
             <div>
               <dt>结论状态</dt>
               <dd>
-                <Badge tone="green">active · 当前版本</Badge>
+                <Badge tone="green">当前有效版本</Badge>
               </dd>
             </div>
             <div>
               <dt>质量标记</dt>
               <dd>
                 {withdrawn ? (
-                  <Badge tone="orange">source_withdrawn</Badge>
+                  <Badge tone="orange">来源已撤回</Badge>
                 ) : (
                   "无来源异常"
                 )}
@@ -1163,7 +1198,7 @@ export default function MobileApp() {
             </div>
             <div>
               <dt>统计对象</dt>
-              <dd>{topic ? "话题展示汇总" : "当前内置样本记录"}</dd>
+              <dd>{topic ? "当前话题原始记录快照" : "当前内置样本记录"}</dd>
             </div>
             <div>
               <dt>时间窗口</dt>
@@ -1190,7 +1225,7 @@ export default function MobileApp() {
             <SearchCheck size={20} />
             <span>
               {topic
-                ? `讨论量、${topic.change}% 热度变化和 ${topic.negative}% 负面占比来自预设汇总快照。下方 ${docs.length} 条为代表证据，不能据此复算这些汇总值。`
+                ? `快照含 ${topic.count} 条原文，负面占比 ${topic.negative}% 可逐条复算；当前可读 ${docs.length} 条。增幅 ${topic.change}% 对比上一窗口 ${topic.previousCount} 条汇总。撤回保留历史计数，停止读取原文。`
                 : "按文档编号去重计数，已撤回记录不计入。下方列出全部参与计算的记录，可逐条核对。"}
             </span>
           </div>
@@ -1214,7 +1249,7 @@ export default function MobileApp() {
           )}
         </Panel>
         <Panel
-          title={topic ? "代表证据" : "参与计算的全部记录"}
+          title={topic ? "本话题当前可读原文" : "参与计算的全部记录"}
           subtitle={`${docs.length} 条 · 点击查看原文与版本`}
         >
           {docs.map(evidenceRow)}
@@ -1273,12 +1308,7 @@ export default function MobileApp() {
   // Export only an available, approved version and include its evidence identifiers and boundaries.
   function exportReport(report: MobileReport) {
     if (report.stale || report.status !== "已发布") return;
-    const docs = articles.filter(
-      (a) =>
-        report.evidenceIds.includes(a.id) &&
-        (!state.withdrawn || a.id !== controlledDocument),
-    );
-    const text = `# ${report.title}\n\n版本 v${report.revision} · ${snapshotTime}\n范围：${report.scope}；覆盖：相对本次观察。\n内置样本，不代表实时生产数据。\n\n## 研判摘要\n本范围共纳入 ${docs.length} 条可用证据，其中 ${docs.filter((a) => a.sentiment === "负面").length} 条为负面表达。相关事实仍需人工核验。\n\n## 证据索引\n${docs.map((a) => `- ${a.evidence} | ${a.source} | ${a.title}`).join("\n")}\n\n## 处置建议\n核实原始信息，补充相关材料，持续跟踪来源与公众诉求变化。`;
+    const text = reportMarkdown(report, state.withdrawn);
     const url = URL.createObjectURL(
       new Blob([text], { type: "text/markdown;charset=utf-8" }),
     );
@@ -1292,10 +1322,12 @@ export default function MobileApp() {
 
   // Keep audit and publication bound to the exact available evidence revision.
   function reportDetail() {
-    if (route.id === collaborationReportId)
+    const eventTopic = topics.find((t) => caseReportId(t.id) === route.id);
+    if (eventTopic)
       return (
         <CollaborationWorkspace
           mobile
+          topicId={eventTopic.id}
           onEvidence={(id) => go(`evidence/${id}`)}
         />
       );
@@ -1327,6 +1359,7 @@ export default function MobileApp() {
             </span>
           </div>
         )}
+        <ReportEvolution report={report} withdrawn={state.withdrawn} />
         <Panel title="研判摘要" action={<Badge tone="neutral">固定快照</Badge>}>
           {report.stale ? (
             <div className="m-locked">
@@ -1350,7 +1383,7 @@ export default function MobileApp() {
                 ，其中负面表达{" "}
                 {docs.filter((a) => a.sentiment === "负面").length} 条。关注
                 {report.scope === "全部领域"
-                  ? "校园餐饮、消费权益与价格信息"
+                  ? "连锁餐饮、消费权益与价格信息"
                   : report.scope}
                 相关诉求，具体事实仍需结合原始材料核验。
               </p>
@@ -1366,10 +1399,15 @@ export default function MobileApp() {
             <span>
               观察截至 {snapshotTime}
               <br />
-              相对本次观察 · 仅含本报告范围内的展示样本
+              相对本次观察 · 仅含本报告范围内的关联原文
             </span>
           </div>
         </Panel>
+        {!report.stale && (
+          <Panel title="话题与证据统计">
+            <ReportMetrics report={report} />
+          </Panel>
+        )}
         <Panel title="重点观察与行动建议">
           <details open>
             <summary>01 / 重点关注</summary>
@@ -1477,27 +1515,18 @@ export default function MobileApp() {
 
   // Show how one explicit source change propagates to evidence, claims and reports.
   function sourceControl() {
-    if (state.collaboration.phase !== "identified")
-      return (
-        <CollaborationWorkspace
-          mobile
-          onEvidence={(id) => go(`evidence/${id}`)}
-        />
-      );
     const impacted = state.reports.filter((r) => r.stale);
     return (
       <>
         <div className="m-page-intro">
           <h1>
-            来源变了<span>依据，也应同步更新</span>
+            来源管理<span>撤回登记与引用检查</span>
           </h1>
           <Layers3 size={43} strokeWidth={1.2} />
         </div>
         <div className="m-notice">
           <Activity size={19} />
-          <span>
-            来源变化场景 · 针对校园餐饮的一条来源内容，展示引用链的联动更新。
-          </span>
+          <span>连锁餐饮事件 · 查看来源状态与受影响报告。</span>
         </div>
         <Panel
           title="来源内容状态"
@@ -1509,14 +1538,14 @@ export default function MobileApp() {
         >
           <ActionRow
             icon={<Radio size={20} />}
-            title="公开社区 · 校园餐饮记录"
+            title="公开社区 · 连锁餐饮记录"
             detail={controlledDocument}
             onClick={() => go(`evidence/${controlledDocument}`)}
           />
           <p className="m-copy">
             {state.withdrawn
               ? "当前原文已隐藏。撤回状态持续生效，历史报告不能绕过当前来源状态读取内容。"
-              : "原文、研判结论与报告之间已建立引用关系。可以切换来源状态，观察各环节的变化。"}
+              : "原文可正常读取。如来源已删除或撤回，请登记变更并检查关联报告。"}
           </p>
           <button
             className="button m-full m-top-gap"
@@ -1524,7 +1553,7 @@ export default function MobileApp() {
             onClick={() => setConfirm("withdraw")}
           >
             <Layers3 size={17} />
-            {state.withdrawn ? "来源撤回已生效" : "切换为来源已撤回"}
+            {state.withdrawn ? "来源撤回已生效" : "登记来源撤回"}
           </button>
         </Panel>
         <Panel title="引用链影响">
@@ -1542,8 +1571,8 @@ export default function MobileApp() {
                 Sparkles,
                 "结构化结论",
                 state.withdrawn
-                  ? "保留 active，标记来源撤回待核验"
-                  : "active · 无来源质量异常",
+                  ? "保留历史结论，标记来源撤回待核验"
+                  : "有效 · 无来源质量异常",
                 `evidence/${controlledDocument}`,
               ],
               [
@@ -1725,8 +1754,8 @@ export default function MobileApp() {
         <Panel title="我的工作">
           <ActionRow
             icon={<Layers3 size={20} />}
-            title="双端协同待办"
-            detail="接收研判中枢任务，回传复核与审核结果"
+            title="事件待办"
+            detail="查看承办事项，提交核验与审核意见"
             onClick={() => go("collaboration")}
           />
           <ActionRow
@@ -1829,7 +1858,7 @@ export default function MobileApp() {
         <div className="m-about-mark">
           <Waves size={39} />
           <h1>观澜</h1>
-          <p>随身风险与决策助手</p>
+          <p>待办工作台</p>
         </div>
         <Panel title="围绕证据开展研判">
           <DetailSection title="点结论，查依据">
@@ -1886,7 +1915,7 @@ export default function MobileApp() {
     me: profile,
     about,
   };
-  const rootPage = tabs.some((t) => t.id === route.section);
+  const rootPage = !route.id && tabs.some((t) => t.id === route.section);
   return (
     <div className="m-stage">
       <div className="m-device">
@@ -1911,7 +1940,7 @@ export default function MobileApp() {
                 : sectionNames[route.section]}
             </strong>
             {route.section === "overview" && (
-              <span className="m-brand-subtitle">移动决策助手</span>
+              <span className="m-brand-subtitle">移动工作台</span>
             )}
           </div>
           <button
@@ -1944,8 +1973,8 @@ export default function MobileApp() {
                   size={22}
                   strokeWidth={activeTab === tab.id ? 2.3 : 1.7}
                 />
-                {tab.id === "alerts" && pending.length > 0 && (
-                  <i>{pending.length}</i>
+                {tab.id === "collaboration" && pendingCases > 0 && (
+                  <i>{pendingCases}</i>
                 )}
               </span>
               <small>{tab.label}</small>
@@ -1961,7 +1990,7 @@ export default function MobileApp() {
         {confirm && (
           <Overlay
             title={
-              confirm === "withdraw" ? "确认来源撤回场景" : "恢复两端共享样本"
+              confirm === "withdraw" ? "确认来源撤回登记" : "恢复两端共享样本"
             }
             onClose={closeConfirm}
             modal
@@ -1993,7 +2022,7 @@ export default function MobileApp() {
                   setConfirm(null);
                 }}
               >
-                {confirm === "withdraw" ? "确认切换" : "确认恢复"}
+                {confirm === "withdraw" ? "确认登记" : "确认恢复"}
               </button>
             </div>
           </Overlay>

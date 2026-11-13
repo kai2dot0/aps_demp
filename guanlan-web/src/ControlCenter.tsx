@@ -37,11 +37,12 @@ import {
   SearchField,
   Sparkline,
 } from "./components";
-import { capabilityGroups, signatureFeatures } from "./capabilities";
-import { articles } from "./data";
+import { capabilityGroups } from "./capabilities";
+import { articles, topics, categories } from "./data";
+import { MetricLineage } from "./Visualizations";
 
 const tabs = [
-  { id: "features", title: "能力全景", icon: Layers3 },
+  { id: "features", title: "运行概览", icon: Layers3 },
   { id: "claims", title: "结论与版本", icon: GitBranch },
   { id: "control", title: "来源控制", icon: Shield },
   { id: "metrics", title: "指标与溯源", icon: Fingerprint },
@@ -55,7 +56,7 @@ type Inspect = { title: string; body: string; reference: string } | null;
 const claimSeed = [
   {
     id: "CLM-001",
-    title: "校园餐饮卫生关注点抽取",
+    title: "连锁餐饮卫生关注点抽取",
     type: "extraction",
     method: "模型抽取",
     status: "active",
@@ -63,7 +64,7 @@ const claimSeed = [
   },
   {
     id: "CLM-002",
-    title: "食品安全样本观察量",
+    title: "食品安全观察量",
     type: "statistic",
     method: "确定性计算",
     status: "active",
@@ -71,7 +72,7 @@ const claimSeed = [
   },
   {
     id: "CLM-003",
-    title: "校园餐饮风险等级判断",
+    title: "连锁餐饮风险等级判断",
     type: "decision",
     method: "规则判定",
     status: "candidate",
@@ -87,7 +88,7 @@ const claimSeed = [
   },
   {
     id: "CLM-005",
-    title: "校园餐饮关注点旧版",
+    title: "连锁餐饮关注点旧版",
     type: "extraction",
     method: "模型抽取",
     status: "superseded",
@@ -110,6 +111,13 @@ const claimSeed = [
     revision: 1,
   },
 ];
+// Bind each claim to its actual topic or domain instead of attributing every claim to the first document.
+const claimEvidence = (id: string) =>
+  articles.filter((a) =>
+    id === "CLM-002"
+      ? a.category === "食品安全"
+      : a.topicId === (id === "CLM-004" ? "TOP-002" : "TOP-001"),
+  );
 const statusLabels: Record<string, string> = {
   candidate: "候选",
   active: "已放行",
@@ -251,8 +259,12 @@ export default function ControlCenter({
       },
       {
         name: "统计结果与贡献文档一致",
-        passed: articles.filter((a) => a.category === "食品安全").length === 4,
-        detail: "食品安全过滤结果为 4 条，贡献文档列表为 4 条。",
+        passed:
+          articles.filter((a) => a.category === "食品安全").length ===
+          topics
+            .filter((t) => t.category === "食品安全")
+            .reduce((n, t) => n + t.count, 0),
+        detail: `食品安全过滤与贡献列表均为 ${articles.filter((a) => a.category === "食品安全").length} 条，可逐条核对。`,
       },
       {
         name: "跨单位替换拒绝",
@@ -286,93 +298,103 @@ export default function ControlCenter({
       .filter((g) => g.items.length);
     return (
       <>
-        <div className="signature-hero">
-          <div>
-            <span className="eyebrow">BUILT FOR TRUSTED INTELLIGENCE</span>
-            <h2>看见舆情，更看清依据。</h2>
-            <p>
-              从一个信号，到一个可核查的结论。观澜把数据、证据、规则与人的判断连接起来。
-            </p>
+        <div className="platform-work-queue">
+          <button onClick={() => switchTab("runtime")}>
+            <span>分析任务</span>
+            <strong>{tasks.length}</strong>
+            <small>查看队列与处理记录 →</small>
+          </button>
+          <button onClick={() => switchTab("claims")}>
+            <span>待确认结论</span>
+            <strong>
+              {claims.filter((c) => c.status === "candidate").length}
+            </strong>
+            <small>核对依据并确认版本 →</small>
+          </button>
+          <button onClick={() => switchTab("metrics")}>
+            <span>本期原始记录</span>
+            <strong>{articles.length}</strong>
+            <small>查看统计口径与贡献原文 →</small>
+          </button>
+        </div>
+        <Panel title="管理工作区" subtitle="任务处理、模型配置与数据治理">
+          <div className="signature-grid">
+            {tabs
+              .filter((t) => t.id !== "features")
+              .map((t) => (
+                <button key={t.id} onClick={() => switchTab(t.id)}>
+                  <t.icon size={21} />
+                  <h3>
+                    {t.title}
+                    <ArrowRight size={16} />
+                  </h3>
+                  <p>查看记录与管理配置</p>
+                </button>
+              ))}
           </div>
-          <div className="orbit-symbol">
-            <i />
-            <i />
-            <i />
-            <Fingerprint size={38} />
+        </Panel>
+        <details className="platform-function-index">
+          <summary>系统功能索引 · {total} 项</summary>
+          <div className="catalog-header">
+            <div>
+              <h2>功能索引</h2>
+              <p>
+                {capabilityGroups.length} 个功能分组 · {total} 项 · 查看功能说明
+              </p>
+            </div>
+            <Badge tone="blue">使用说明</Badge>
           </div>
-        </div>
-        <div className="signature-grid">
-          {signatureFeatures.map((f) => (
-            <button key={f.number} onClick={() => switchTab(f.tab)}>
-              <span>{f.number}</span>
-              <h3>
-                {f.title}
-                <ArrowRight size={16} />
-              </h3>
-              <p>{f.description}</p>
-            </button>
-          ))}
-        </div>
-        <div className="catalog-header">
-          <div>
-            <h2>完整能力地图</h2>
-            <p>
-              {capabilityGroups.length} 个能力域 · {total} 项设计能力 ·
-              点击查看功能说明与设计依据
-            </p>
-          </div>
-          <Badge tone="blue">业务 + 内核 + 数据治理</Badge>
-        </div>
-        <div className="standalone-filters">
-          <SearchField
-            value={query}
-            onChange={setQuery}
-            placeholder="搜索功能，如断流、回放、指标、领域包"
-          />
-          <select
-            aria-label="能力领域"
-            value={group}
-            onChange={(e) => setGroup(e.target.value)}
-          >
-            <option value="all">全部能力域</option>
-            {capabilityGroups.map((g) => (
-              <option value={g.id} key={g.id}>
-                {g.title}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="capability-grid">
-          {groups.map((g) => (
-            <Panel
-              key={g.id}
-              title={g.title}
-              subtitle={g.subtitle}
-              action={
-                <span className="capability-count">{g.items.length}</span>
-              }
+          <div className="standalone-filters">
+            <SearchField
+              value={query}
+              onChange={setQuery}
+              placeholder="搜索功能，如断流、回放、指标、领域包"
+            />
+            <select
+              aria-label="能力领域"
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
             >
-              <div className="capability-items">
-                {g.items.map(([title, body], i) => (
-                  <button
-                    key={title}
-                    onClick={() =>
-                      setInspect({ title, body, reference: g.reference })
-                    }
-                  >
-                    <span>{String(i + 1).padStart(2, "0")}</span>
-                    <div>
-                      <strong>{title}</strong>
-                      <small>{body}</small>
-                    </div>
-                    <ChevronRight size={14} />
-                  </button>
-                ))}
-              </div>
-            </Panel>
-          ))}
-        </div>
-        {!groups.length && <EmptyState />}
+              <option value="all">全部能力域</option>
+              {capabilityGroups.map((g) => (
+                <option value={g.id} key={g.id}>
+                  {g.title}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="capability-grid">
+            {groups.map((g) => (
+              <Panel
+                key={g.id}
+                title={g.title}
+                subtitle={g.subtitle}
+                action={
+                  <span className="capability-count">{g.items.length}</span>
+                }
+              >
+                <div className="capability-items">
+                  {g.items.map(([title, body], i) => (
+                    <button
+                      key={title}
+                      onClick={() =>
+                        setInspect({ title, body, reference: g.reference })
+                      }
+                    >
+                      <span>{String(i + 1).padStart(2, "0")}</span>
+                      <div>
+                        <strong>{title}</strong>
+                        <small>{body}</small>
+                      </div>
+                      <ChevronRight size={14} />
+                    </button>
+                  ))}
+                </div>
+              </Panel>
+            ))}
+          </div>
+          {!groups.length && <EmptyState />}
+        </details>
       </>
     );
   }
@@ -382,7 +404,7 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <GitBranch size={25} />
           <div>
-            <h2>结论不是一段文本，而是一条可核查的记录。</h2>
+            <h2>结论管理</h2>
             <p>
               每条 Claim
               绑定方法、证据、修订和放行策略；来源删除与显式撤回保持不同语义。
@@ -391,7 +413,7 @@ export default function ControlCenter({
         </div>
         <Panel
           title="结构化结论"
-          subtitle="样本场景 · 五类结论、五种状态"
+          subtitle="按结论类型、状态与版本筛选"
           action={
             <select
               aria-label="结论状态"
@@ -432,7 +454,13 @@ export default function ControlCenter({
                           onClick={() =>
                             setInspect({
                               title: c.title,
-                              body: `主体：${c.id}；类型：${c.type}；修订：r${c.revision}；策略：acceptance-policy@1.2。证据绑定来源 DOC-1103-001；所有结论均带 contains_simulated_input 标志。来源撤回只改变可用性，不改变本条状态。`,
+                              body: `主体：${c.id}；类型：${c.type}；修订：r${c.revision}；策略：acceptance-policy@1.2。关联 ${claimEvidence(c.id).length} 条原文：${claimEvidence(
+                                c.id,
+                              )
+                                .map((a) => a.id)
+                                .join(
+                                  "、",
+                                )}。所有结论均带 contains_simulated_input 标志。来源撤回只改变可用性，不改变本条状态。`,
                               reference: "分册一 §14、§16；大纲 §4.2",
                             })
                           }
@@ -557,12 +585,10 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <Shield size={26} />
           <div>
-            <h2>一条来源状态变化，贯穿整条证据链。</h2>
-            <p>
-              在独立场景中观察临时不可用、核验恢复与永久撤回对下游的不同影响。
-            </p>
+            <h2>来源状态与引用控制</h2>
+            <p>管理来源可用性、恢复核验与撤回处理记录。</p>
           </div>
-          <Badge tone="purple">独立场景</Badge>
+          <Badge tone="purple">配置预览</Badge>
         </div>
         <div className="control-scenario">
           <div className="scenario-source">
@@ -571,7 +597,7 @@ export default function ControlCenter({
             </span>
             <div>
               <small>源记录 · SCENE-DOC-001</small>
-              <h3>校园周边餐饮卫生讨论</h3>
+              <h3>连锁餐饮后厨卫生与食材追溯讨论</h3>
               <Badge tone={withdrawn ? "red" : gated ? "orange" : "green"}>
                 {withdrawn
                   ? "永久撤回"
@@ -635,7 +661,7 @@ export default function ControlCenter({
               onClick={() => {
                 setSourceState("available");
                 setCleaned(false);
-                log("重置独立场景，恢复初始样本。");
+                log("重置配置预览，恢复初始样本。");
               }}
             >
               <RefreshCw size={16} />
@@ -717,7 +743,7 @@ export default function ControlCenter({
             </div>
           )}
         </div>
-        <Panel title="控制链路记录" subtitle="此场景只影响当前页面内的样本">
+        <Panel title="控制链路记录" subtitle="来源状态及引用处理记录">
           <AuditLog rows={audit} />
         </Panel>
       </>
@@ -744,12 +770,18 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <Fingerprint size={27} />
           <div>
-            <h2>点击一个数字，看见它如何得来。</h2>
+            <h2>统计口径与贡献明细</h2>
             <p>
               指标结果绑定定义、单位、观察窗口和贡献文档。模型不能凭空填写统计数字。
             </p>
           </div>
         </div>
+        <MetricLineage
+          value={result}
+          label={counting}
+          scope={metric}
+          recordCount={displayed.length}
+        />
         <div className="metric-workbench">
           <div className="metric-controls">
             <label>
@@ -759,9 +791,9 @@ export default function ControlCenter({
                 onChange={(e) => setMetric(e.target.value)}
               >
                 <option>全部领域</option>
-                <option>食品安全</option>
-                <option>消费权益</option>
-                <option>价格监管</option>
+                {categories.map((category) => (
+                  <option key={category}>{category}</option>
+                ))}
               </select>
             </label>
             <label>
@@ -812,7 +844,11 @@ export default function ControlCenter({
                   ? "FOOD"
                   : metric === "消费权益"
                     ? "RIGHTS"
-                    : "PRICE"}
+                    : metric === "价格监管"
+                      ? "PRICE"
+                      : metric === "产品质量"
+                        ? "QUALITY"
+                        : "EQUIPMENT"}
               -
               {counting === "独立作者"
                 ? "A"
@@ -825,8 +861,8 @@ export default function ControlCenter({
             </code>
             <code>as_of: 2026-11-03T14:30:00+08:00</code>
             <p>
-              从 12
-              条可查阅样本计算。去重口径应在指标目录中显式定义，原始记录不因重复而删除。当前为原始记录、情感筛选、作者或话题分组的可交互示例。
+              从 {articles.length}{" "}
+              条快照记录计算。去重口径应在指标目录中显式定义，原始记录不因重复而删除。当前为原始记录、情感筛选、作者或话题分组的可交互示例。
             </p>
             <div className="inline-labels">
               <Badge tone="orange">相对本次观察</Badge>
@@ -930,7 +966,7 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <Sparkles size={27} />
           <div>
-            <h2>理解交给模型，边界交给平台。</h2>
+            <h2>模型路由与调用管理</h2>
             <p>
               生成、嵌入、配额、结构化校验与来源反向索引统一治理。下方为配置与缓存行为预演。
             </p>
@@ -1098,13 +1134,13 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <Workflow size={27} />
           <div>
-            <h2>任务可恢复，结果只生效一次。</h2>
+            <h2>任务队列与执行记录</h2>
             <p>权威事件、租约栅栏、有序键和原子回执共同约束每一次提交。</p>
           </div>
         </div>
         <Panel
           title="任务与死信"
-          subtitle="任务状态、重试与回执的本地预演"
+          subtitle="查看任务状态、重试与执行回执"
           action={
             <select
               aria-label="任务筛选"
@@ -1301,18 +1337,18 @@ export default function ControlCenter({
                 </div>
                 <div>
                   <dt>时钟与预算</dt>
-                  <dd>虚拟时钟 · 12 条记录</dd>
+                  <dd>虚拟时钟 · {articles.length} 条记录</dd>
                 </div>
               </dl>
               <button
                 className="button"
                 onClick={() => {
                   log(
-                    "隔离回放：12 条样本 → 6 个重点话题；输出留在 replay 命名空间，未晋升业务结果。",
+                    `隔离回放：${articles.length} 条样本 → ${topics.length} 个重点话题；输出留在 replay 命名空间，未晋升业务结果。`,
                   );
                   setInspect({
                     title: "隔离回放完成",
-                    body: "输入：固定的 12 条样本记录；namespace=replay/scene-1103；无外部采集、无模型调用。已撤回记录不恢复。影子结果只有通过版本、权限与质量检查后才可申请晋升。",
+                    body: `输入：固定的 ${articles.length} 条样本记录；namespace=replay/scene-1103；无外部采集、无模型调用。已撤回记录不恢复。影子结果只有通过版本、权限与质量检查后才可申请晋升。`,
                     reference: "分册一 §9",
                   });
                 }}
@@ -1332,7 +1368,7 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <FlaskConical size={27} />
           <div>
-            <h2>不只看“报得对不对”，也看“该报的有没有报”。</h2>
+            <h2>质量评测与检查记录</h2>
             <p>
               逐条质量、漏报、发现时延和端到端组合分别评估，样本不足时保留未知。
             </p>
@@ -1466,7 +1502,7 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <Box size={27} />
           <div>
-            <h2>用领域包替换业务知识，复用同一协同内核。</h2>
+            <h2>领域配置管理</h2>
             <p>
               领域标签、词库、规则、模板和知识依赖随 Run 锁定，升级保持可追溯。
             </p>
@@ -1513,7 +1549,7 @@ export default function ControlCenter({
                 检查并锁定配置
               </button>
               <p className="record-note">
-                第二领域包用于证明内核没有市场监管领域硬编码。此处只改变配置预览，不改写当前业务样本。
+                领域包包含分类、规则与知识配置。切换前请检查结构兼容性，当前配置处于预览状态。
               </p>
             </div>
           </Panel>
@@ -1562,7 +1598,7 @@ export default function ControlCenter({
                 <tr>
                   <th>扩展</th>
                   <th>用途</th>
-                  <th>当前设计状态</th>
+                  <th>启用状态</th>
                   <th>输出约束</th>
                 </tr>
               </thead>
@@ -1619,7 +1655,7 @@ export default function ControlCenter({
         <div className="workbench-intro">
           <Server size={27} />
           <div>
-            <h2>运行状态透明，数据访问有边界。</h2>
+            <h2>资源与运行监控</h2>
             <p>
               展示资源预算、运行追踪、模式隔离与副本责任；监控值均为固定样本。
             </p>
@@ -1749,7 +1785,7 @@ export default function ControlCenter({
             ))}
           </div>
         </Panel>
-        <Panel title="本次场景操作日志" className="mt-panel">
+        <Panel title="操作日志" className="mt-panel">
           <AuditLog rows={audit} />
         </Panel>
       </>
@@ -1769,11 +1805,11 @@ export default function ControlCenter({
   return (
     <>
       <PageHeader
-        title="平台能力工作台"
-        description="完整展示业务能力与治理机制，把系统特色变成可理解、可操作的流程。"
+        title="平台管理"
+        description="管理数据接入、分析任务、模型与运行配置。"
       >
-        <Badge tone="blue">{total} 项能力</Badge>
-        <Badge tone="purple">本地场景预演</Badge>
+        <Badge tone="blue">配置工作区</Badge>
+        <Badge tone="neutral">样本环境</Badge>
       </PageHeader>
       <div className="workbench-tabs">
         {tabs.map((t) => (
@@ -1789,21 +1825,14 @@ export default function ControlCenter({
       </div>
       {(views[tab] || featureView)()}
       {inspect && (
-        <Overlay
-          title={inspect.title}
-          subtitle="能力说明与设计依据"
-          onClose={close}
-        >
+        <Overlay title={inspect.title} subtitle="功能说明" onClose={close}>
           <div className="inspection-icon">
             <Layers3 size={28} />
           </div>
           <p className="inspection-body">{inspect.body}</p>
-          <DetailSection title="设计依据">
-            <Badge tone="blue">{inspect.reference}</Badge>
-          </DetailSection>
           <DetailSection title="实现边界">
             <p className="body-copy">
-              本工作台展示功能设计、样本状态及操作流程。生产运行需接入对应平台服务；涉及规则、模型、权限和负载的结果，以实际部署后的验收为准。
+              当前使用本地样本及配置，尚未连接生产服务。操作不会修改真实采集源、模型网关或运行集群。
             </p>
           </DetailSection>
           <button
@@ -1833,8 +1862,8 @@ function AuditLog({ rows }: { rows: string[] }) {
     </div>
   ) : (
     <EmptyState
-      title="等待场景操作"
-      description="进行状态变更或运行预演后，此处显示不含原文的操作记录。"
+      title="暂无操作记录"
+      description="执行状态变更后，可在此查看操作时间与处理结果。"
     />
   );
 }

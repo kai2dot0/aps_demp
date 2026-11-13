@@ -1,0 +1,61 @@
+[
+  {
+    "slide": 5,
+    "gif": "overview",
+    "frames": 83,
+    "unique_frames": 75,
+    "seconds": 10.38,
+    "loop": "infinite"
+  },
+  {
+    "slide": 6,
+    "gif": "mobile",
+    "frames": 64,
+    "unique_frames": 58,
+    "seconds": 8.01,
+    "loop": "infinite"
+  },
+  {
+    "slide": 8,
+    "gif": "evidence",
+    "frames": 81,
+    "unique_frames": 78,
+    "seconds": 10.13,
+    "loop": "infinite"
+  },
+  {
+    "slide": 11,
+    "gif": "dispatch",
+    "frames": 58,
+    "unique_frames": 56,
+    "seconds": 7.26,
+    "loop": "infinite"
+  },
+  {
+    "slide": 13,
+    "gif": "withdrawal",
+    "frames": 79,
+    "unique_frames": 75,
+    "seconds": 9.88,
+    "loop": "infinite"
+  },
+  {
+    "slide": 14,
+    "gif": "agents",
+    "frames": 90,
+    "unique_frames": 90,
+    "seconds": 11.26,
+    "loop": "infinite"
+  },
+  {
+    "slide": 19,
+    "video": "guanlan-film.mp4",
+    "seconds": "60.000000",
+    "codec": "h264",
+    "size": [
+      1440,
+      810
+    ],
+    "playback": "click-to-play"
+  }
+]
